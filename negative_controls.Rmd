@@ -1,0 +1,112 @@
+---
+title: "Untitled"
+author: "Kate"
+date: "2022-11-03"
+output: html_document
+---
+
+```{r}
+neg_asvs <- read_csv(here::here("data", "negative_controls", "seqtab_nochim_transposed_BUGSBerlinnegs_v34.csv")) %>%
+  tibble::column_to_rownames("...1")
+neg_asvs <- as.matrix(neg_asvs)
+
+neg_taxa <- read_csv(here::here("data", "negative_controls", "taxa_BUGSberlinnegs_silva132.csv")) %>%
+  tibble::column_to_rownames("...1")
+neg_taxa <- as.matrix(neg_taxa)
+
+map <- data.frame(sampleID = colnames(neg_asvs))
+
+map$rownames <- map$sampleID
+map <- map %>%
+  tibble::column_to_rownames("rownames")
+
+dat_neg <- phyloseq(otu_table(neg_asvs, taxa_are_rows = TRUE),
+                tax_table(neg_taxa), 
+                sample_data(map))
+
+summary(taxa_sums(dat_neg))
+summary(sample_sums(dat_neg))
+
+dat_neg <- prune_samples(sample_sums(dat_neg) > 0, dat_neg)
+
+sample_sums(dat_neg)
+
+dat_neg <- subset_samples(dat_neg, sampleID != "LR324neg" &
+                            sampleID != "LR343neg" &
+                            sampleID != "LR355-NEG" &
+                            sampleID != "LR391neg")
+
+summary(taxa_sums(dat_neg))
+
+dat_neg <- prune_taxa(taxa_sums(dat_neg) > 1, dat_neg)
+
+sample_sums(dat_neg)
+
+neg_rel <- transform_sample_counts(dat_neg, function(x) x/sum(x))
+```
+
+```{r}
+
+prevdf <- apply(X = otu_table(dat_neg), 
+                 MARGIN = ifelse(taxa_are_rows(dat_neg), 
+                                 yes=1,
+                                 no=2),
+                 FUN = function(x){
+                   sum(x>0)
+                 })
+ # Add taxonomy and total read counts to this data.frame
+
+prevdf <- data.frame(Prevalence = prevdf, 
+                     TotalAbundance = taxa_sums(dat_neg),
+                     tax_table(neg_rel))
+
+plyr::ddply(prevdf, "Phylum", 
+            function(df1){
+              cbind(mean(df1$Prevalence),
+                    sum(df1$Prevalence))
+            })
+
+
+prevdf1 <- subset(prevdf, Phylum %in% get_taxa_unique(dat_neg, "Phylum"))
+
+ggplot(prevdf1, aes(TotalAbundance, Prevalence/nsamples(neg_rel), colour = Phylum)) +
+  geom_hline(yintercept = 0.02, alpha = 0.5, linetype = 2) +
+  geom_point(size = 2, alpha = 0.2) +
+  scale_x_log10()+
+  xlab("Total Abundance")+
+  ylab("Prevalence")+
+  facet_wrap(~Phylum)+
+  theme(legend.position = "none")
+ggsave(here::here("figures", "neg_taxa_prevalence.jpeg"))
+```
+
+```{r TBFPrep}
+gen_rel = tax_glom(neg_rel, 'Genus')
+fam_rel = tax_glom(gen_rel, 'Family')
+class_rel = tax_glom(fam_rel, "Class")
+phy_rel = tax_glom(class_rel, 'Phylum')
+
+gen_counts = taxa_sums(gen_rel)
+top_gen = rownames(tax_table(gen_rel))[order(gen_counts, decreasing = TRUE)[1:20]]
+top_gen_dat = prune_taxa(top_gen, gen_rel)
+fam_counts = taxa_sums(fam_rel)
+top_fam = rownames(tax_table(fam_rel))[order(fam_counts, decreasing = TRUE)[1:20]]
+top_fam_dat = prune_taxa(top_fam, fam_rel)
+class_counts = taxa_sums(class_rel)
+top_class = rownames(tax_table(class_rel))[order(class_counts, decreasing = TRUE)[1:20]]
+top_class_dat = prune_taxa(top_class, class_rel)
+phy_counts = taxa_sums(phy_rel)
+top_phy = rownames(tax_table(phy_rel))[order(phy_counts, decreasing = TRUE)[1:20]]
+top_phy_dat = prune_taxa(top_phy, phy_rel)
+
+gen_df = make_phy_df(top_gen_dat, rank = 'Genus', prop = FALSE)
+#gen_df$EADP <- factor(gen_df$EADP, levels = c("No EADP", "EADP"))
+fam_df = make_phy_df(top_fam_dat, rank = 'Family', prop = FALSE)
+class_df = make_phy_df(top_class_dat, rank = "Class", prop = FALSE)
+phy_df = make_phy_df(top_phy_dat, rank = 'Phylum', prop = FALSE)
+```
+
+```{r}
+plot_bar(top_gen_dat, fill = "Genus")
+```
+

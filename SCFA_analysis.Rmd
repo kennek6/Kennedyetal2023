@@ -1,0 +1,337 @@
+---
+title: "BUGSinBerlin_scfa_analysis"
+author: "Kate"
+date: "1/17/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+all_data <- full_join(metadat, SCFA_data)%>%
+  mutate(measure = fct_relevel(measure, c("acetic_acid", "butyric_acid", "propionic_acid", 
+                                          "pentanoic_acid", "isobutyric_acid", "isovaleric_acid"))) %>%
+  group_by(participantID)%>%
+  slice(1)%>%
+  mutate(SCFA_sample = participantID %in% SCFA_data$participantID)%>%
+  ungroup()
+
+listVars <- c("BMI_cat_0", "age", "para", "gravida", "BMI_SM0", "weight_gain", "gain_cat", "weight_retained","dG", "Mode", "SCFA_sample")
+
+
+t1 <- all_data %>%
+  select(all_of(listVars))%>%
+  tbl_summary(
+    by = SCFA_sample,
+    missing = "no",
+  )%>%
+  add_p(everything()~"kruskal.test")%>%
+  add_q()%>%
+  bold_p(t=0.05, q = TRUE)
+```
+
+
+```{r}
+SCFA_data <- inner_join(metadat, SCFA_data) %>%
+  mutate(measure = fct_relevel(measure, c("acetic_acid", "butyric_acid", "propionic_acid", 
+                                          "pentanoic_acid", "isobutyric_acid", "isovaleric_acid")))
+
+SCFA_data$gain_cat[SCFA_data$gain_cat == "below"] <- "within"
+SCFA_data$gain_cat[SCFA_data$participantID == "H-097"] <- "within"
+
+SCFA_data %<>% mutate(BMI_cat_0=recode(BMI_cat_0, 
+                                       "underweight"="<25",
+                                       "optimal"="<25",
+                                       "overweight"=">25",
+                                       "obese"=">25"))
+SCFA_data %<>% mutate(BMI0_gaincat = factor(paste(BMI_cat_0, gain_cat), levels = c("<25 within", "<25 above", ">25 above")))
+
+SCFA_names <- as_labeller(c("acetic_acid" = "acetate",
+                "propionic_acid" = "propionate",
+                "butyric_acid" = "butyrate",
+                "isobutyric_acid" = "isobutyrate",
+                "isovaleric_acid" = "isovalerate",
+                "lactic_acid" = "lactate"))
+```
+```{r}
+df <- SCFA_data%>%
+  group_by(participantID)%>%
+  dplyr::slice(1)
+
+table(df$para, df$BMI0_gaincat)
+```
+
+
+```{r}
+SCFA_data %>%
+  filter(sampleTime %in% c("SM1", "SM2", "SM3", "SM4", "SM5") & 
+           norm == "value_rel" & 
+           measure %in% c("acetic_acid"
+                          ))%>%
+  ggplot(aes(x=para, y=total_SCFA, colour = BMI0_gaincat))+
+  stat_summary(fun.data = "mean_sd", aes(group=BMI0_gaincat), 
+               position = position_dodge(
+                 width=0.75
+               ))+
+  geom_point(position = position_jitterdodge(
+    dodge.width = 0.75
+  ), alpha = 0.2)+
+  theme(strip.background = element_blank(), 
+        panel.border = element_blank(),
+        legend.position = "bottom", 
+        axis.title.x = element_blank()
+        )+
+  geom_line(aes(group=participantID), alpha =0.3, linetype = "dotted")+
+  theme(strip.background = element_blank())+
+  scale_x_discrete(labels = c("Primiparous", "Multiparous"))
+  #labs(y="% of total SCFA", x="Sample Time")#+
+  #facet_wrap(~measure, scales = "free")
+#(here("figures", "SCFA", "SCFA_rel_time.pdf"), width = 5.5, height=10)
+```
+
+
+```{r}
+SCFAtime <- SCFA_data%>%
+  filter(sampleTime %in% c("SM1", "SM2", "SM3", "SM4", "SM5") & 
+           norm == "value_rel" & 
+           measure == "acetic_acid")
+
+unique(SCFAtime$participantID)
+
+mixed.lm1 <- lmer(total_SCFA ~ BMI_cat_0*para  + (1|participantID), data = SCFAtime)
+anova(mixed.lm1)
+emm_s.t <- emmeans(mixed.lm1, specs = pairwise ~ BMI_cat_0|para)
+pairs(emm_s.t)
+
+mixed.lm1 <- lmer(total_SCFA ~ gain_cat*para  + (1|participantID), data = SCFAtime)
+anova(mixed.lm1)
+emm_s.t <- emmeans(mixed.lm1, specs = pairwise ~ gain_cat|para)
+pairs(emm_s.t)
+```
+
+
+```{r}
+Fig2 <- SCFA_data %>%
+  filter(sampleTime %in% c("SM1", "SM2", "SM3", "SM4", "SM5") & 
+           norm == "value_rel" & 
+           measure %in% c("acetic_acid", "butyric_acid", "propionic_acid", 
+                          "isobutyric_acid", "isovaleric_acid", "lactic_acid"
+                          )
+         )%>%
+  ggplot(aes(x=para, y=value, colour = BMI0_gaincat))+
+  #geom_boxplot()+
+  stat_summary(fun.data = "mean_sd", aes(group=BMI0_gaincat), 
+               position = position_dodge(
+                 width=0.75
+               ))+
+  geom_point(position = position_jitterdodge(
+    dodge.width = 0.75
+  ), alpha = 0.2)+
+  theme(strip.background = element_blank(), 
+        panel.border = element_blank(),
+        legend.position = "bottom"
+        )+
+  labs(y="% of total SCFA", x="")+
+  #scale_x_discrete(labels= c("<25 \nwithin", "<25 \nabove", ">25 \nabove"))+
+  scale_x_discrete(labels = c("Primiparous", "Multiparous"))+
+  facet_wrap(~measure, scales = "free",
+             labeller = SCFA_names
+             )+
+  scale_colour_manual(values = c("#003f5c", "#444e86", "#dd5151"),
+                      name = "pBMI and GWG")
+
+
+Fig2
+#ggsave(here("figures", "SCFA", "SCFA_rel_BMIGWG.pdf"), width = 8, height=12)
+
+measures <- unique(SCFA_data$measure)
+
+theme_set(theme_bw())
+
+```
+
+
+```{r}
+output1 = data.frame(matrix(data = NA, nrow = 1, ncol = 6))
+cn = c("Sum Sq",  "Mean Sq", "NumDF" ,  "DenDF" ,  "F value" ,"Pr(>F)" )
+colnames(output1) = cn
+blank = output1
+
+posthoc1 = data.frame(matrix(data = NA, nrow = 1, ncol = 7))
+cn = c("contrast", "para", "estimate", "SE", "df", "t.ratio", "p.value" )
+colnames(posthoc1) = cn
+blank = posthoc1
+
+for (x in measures) {
+  
+  SCFA_stat <- SCFA_data %>%
+    filter(measure == x & 
+             norm == "value_rel" & 
+             sampleTime %in% c("SM1", "SM2", "SM3", "SM4", "SM5"))
+  
+  mixed.lm1 <- lmer(value ~ BMI_cat_0*para  + (1|participantID), data = SCFA_stat)
+  a <- anova(mixed.lm1)
+  
+  output1 <- rbind(output1, a)
+  
+  emm_s.t <- emmeans(mixed.lm1, specs = pairwise ~ BMI_cat_0|para)
+  p1 <- pairs(emm_s.t)
+  p1 <- p1$emmeans
+  
+  posthoc1 <- rbind(posthoc1, as.data.frame(p1))
+  
+  #############
+  
+  mixed.lm1 <- lmer(value ~ gain_cat*para + (1|participantID), data = SCFA_stat)
+  a <- anova(mixed.lm1)
+  
+  output1 <- rbind(output1, a)
+  
+  emm_s.t <- emmeans(mixed.lm1, specs = pairwise ~ gain_cat|para)
+  p1 <- pairs(emm_s.t)
+  p1 <- p1$emmeans
+  
+  posthoc1 <- rbind(posthoc1, as.data.frame(p1))
+  
+  # emm_s.t <- emmeans(mixed.lm1, specs = trt.vs.ctrlk ~ BMI_cat_0 | para, ref = "<25")
+  # p2 <- pairs(emm_s.t)
+  # p2 <- p2$emmeans
+  # 
+  # posthoc1 <- rbind(posthoc1, as.data.frame(p2))
+  # 
+  # emm_s.t <- emmeans(mixed.lm1, specs = trt.vs.ctrlk ~ para, ref = "0")
+  # p3 <- pairs(emm_s.t)
+  # p3 <- p3$emmeans
+  # 
+  # posthoc1 <- rbind(posthoc1, as.data.frame(p3))
+  
+}
+
+
+output1 = output1[-1,]  # Remove the NAs
+#output1$contrast <- strrep(c("BMI_cat_0", "paraBMI", "BMIint", "gain_cat", "paragain", "gainint"), times = 7)
+output1$Measure <- rep(measures, each = 6)
+output1$factor <- row.names(output1)
+
+posthoc1 <- posthoc1[-1,]
+posthoc1$Measure <- rep(measures, each = 4)
+
+#write_csv(output1, here::here("results", "SCFA_main_effects.csv"))
+#write_csv(posthoc1, here::here("results","SCFA_multiple_comparisons.csv"))
+```
+
+
+```{r}
+SCFA_infant <- SCFA_data %>%
+  filter(sampleTime %in% c("SF5") & 
+           norm == "value_rel" & 
+           measure %in% c("acetic_acid", "butyric_acid", "propionic_acid", 
+                          "isobutyric_acid", "isovaleric_acid", "lactic_acid"
+                          )
+         )
+
+table(SCFA_infant$para, SCFA_infant$gain_cat, SCFA_infant$measure)
+
+SCFA_infant%>%
+  ggplot(aes(x=para, y=value, colour = gain_cat))+
+  #geom_boxplot()+
+  stat_summary(fun.data = "mean_sd", aes(group=gain_cat), 
+               position = position_dodge(
+                 width=0.75
+               ))+
+  geom_point(position = position_jitterdodge(
+    dodge.width = 0.75
+  ), alpha = 0.2)+
+  theme(strip.background = element_blank(), 
+        panel.border = element_blank(),
+        legend.position = "bottom"
+        )+
+  labs(y="% of total SCFA", x="")+
+  #scale_x_discrete(labels= c("<25 \nwithin", "<25 \nabove", ">25 \nabove"))+
+  scale_x_discrete(labels = c("Primiparous", "Multiparous"))+
+  facet_wrap(~measure, scales = "free",
+             labeller = SCFA_names)+
+  scale_colour_manual(values = c("#955196", "#003f5c"),
+                      name = "GWG")
+```
+
+```{r}
+SCFA_infant%>%
+  ggplot(aes(x=gain_cat, y=value, colour = gain_cat))+
+  #geom_boxplot()+
+  stat_summary(fun.data = "mean_sd", aes(group=gain_cat))+
+  geom_point(position = position_jitter(), alpha = 0.2)+
+  theme(strip.background = element_blank(), 
+        panel.border = element_blank(),
+        legend.position = "bottom"
+        )+
+  labs(y="% of total SCFA", x="")+
+  #scale_x_discrete(labels= c("<25 \nwithin", "<25 \nabove", ">25 \nabove"))+
+  # scale_x_discrete(labels = c("Primiparous", "Multiparous"))+
+  facet_wrap(~measure, scales = "free",
+             labeller = SCFA_names)+
+  scale_colour_manual(values = c("#955196", "#003f5c"),
+                      name = "GWG")
+```
+
+
+
+```{r}
+SCFA_wide <- read_excel(here("data", "SCFA_samples.xlsx")) %>%
+  filter(sampleID != 25 &
+           sampleID != 45)%>%
+  select(-sampleID)
+
+id_scfa <- unique(SCFA_wide$participantID)
+
+dat_scfa <- subset_samples(dat_rel_filt, participantID %in% id_scfa)
+
+dat_scfa
+```
+
+
+```{r TBFPrep}
+gen_rel = tax_glom(dat_scfa, 'Genus')
+fam_rel = tax_glom(gen_rel, 'Family')
+class_rel = tax_glom(fam_rel, "Class")
+phy_rel = tax_glom(class_rel, 'Phylum')
+
+gen_counts = taxa_sums(gen_rel)
+top_gen = rownames(tax_table(gen_rel))[order(gen_counts, decreasing = TRUE)[1:20]]
+top_gen_dat = prune_taxa(top_gen, gen_rel)
+fam_counts = taxa_sums(fam_rel)
+top_fam = rownames(tax_table(fam_rel))[order(fam_counts, decreasing = TRUE)[1:20]]
+top_fam_dat = prune_taxa(top_fam, fam_rel)
+class_counts = taxa_sums(class_rel)
+top_class = rownames(tax_table(class_rel))[order(class_counts, decreasing = TRUE)[1:20]]
+top_class_dat = prune_taxa(top_class, class_rel)
+phy_counts = taxa_sums(phy_rel)
+top_phy = rownames(tax_table(phy_rel))[order(phy_counts, decreasing = TRUE)[1:20]]
+top_phy_dat = prune_taxa(top_phy, phy_rel)
+
+gen_df = make_phy_df(top_gen_dat, rank = 'Genus', prop = FALSE)
+#gen_df$EADP <- factor(gen_df$EADP, levels = c("No EADP", "EADP"))
+fam_df = make_phy_df(top_fam_dat, rank = 'Family', prop = FALSE)
+class_df = make_phy_df(top_class_dat, rank = "Class", prop = FALSE)
+phy_df = make_phy_df(top_phy_dat, rank = 'Phylum', prop = FALSE)
+```
+
+```{r TaxaBarCharts, include = TRUE}
+gen_tbf <- gen_df %>%
+  plot_tax_bar('Genus', sample = 'BMI_cat_0', mean = TRUE) +
+	ggtitle('Relative Abundance of top 20 genera')+
+  facet_wrap(~para, scales = "free_x")
+gen_tbf
+ggsave(here("figures", "SCFA", "tbf_gen.jpeg"), width = 12, height=8)
+
+fam_tbf <- fam_df %>%
+  plot_tax_bar('Family', sample = 'BMI_cat_0', mean = TRUE) +
+	ggtitle('Relative Abundance of top 20 families')+
+  facet_wrap(~para, scales = "free_y")
+fam_tbf
+ggsave(here("figures", "SCFA", "tbf_fam.jpeg"), width = 12, height=8)
+
+```
+

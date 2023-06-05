@@ -1,0 +1,159 @@
+
+
+###Meconium analyses
+
+```{r}
+mec_filt <- subset_samples(dat_filt, sampleTime == "SF4")
+
+mec_rel_filt <- subset_samples(dat_rel_filt, sampleTime  == "SF4")
+
+# remove all empty taxa
+mec_filt <-  prune_taxa(taxa_sums(mec_filt) > 1, mec_filt) 
+
+mec_rel_filt <-  prune_taxa(taxa_names(mec_filt), mec_rel_filt)
+
+summary(taxa_sums(mec_rel_filt))
+```
+
+```{r mec palette}
+colours20 <- c("#ffb037",
+"#3a8fcf",
+"#ceadc4",
+"#a93c60",
+"#00a28f",
+"#ffc3a4",
+"#c1d0ad",
+"#5d653d",
+"#8e3b48",
+"#d31a1a",
+"#ac5736",
+"#241d62",
+"#ff6464",
+"#83d7bc",
+"#979abc",
+"#ce875d",
+"#7da23e",
+"#65422e",
+"#b068bb",
+"#7b989e",
+ "grey50")
+```
+
+#Taxa bar plots
+```{r TBFPrep}
+dat_tbf <- dat_rel_filt# %>%
+  #subset_samples(birth_antibiotics == 0)
+
+dat_filt_glom <- tax_glom(dat_tbf, "Genus")
+
+gen_rel = tax_glom(dat_filt_glom, 'Genus')
+fam_rel = tax_glom(gen_rel, 'Family')
+ord_rel = tax_glom(fam_rel, "Order")
+class_rel = tax_glom(ord_rel, "Class")
+phy_rel = tax_glom(class_rel, 'Phylum')
+
+gen_counts = taxa_sums(gen_rel)
+top_gen = rownames(tax_table(gen_rel))[order(gen_counts, decreasing = TRUE)[1:20]]
+top_gen_dat = prune_taxa(top_gen, gen_rel)
+fam_counts = taxa_sums(fam_rel)
+top_fam = rownames(tax_table(fam_rel))[order(fam_counts, decreasing = TRUE)[1:20]]
+top_fam_dat = prune_taxa(top_fam, fam_rel)
+
+ord_counts = taxa_sums(ord_rel)
+top_ord = rownames(tax_table(ord_rel))[order(ord_counts, decreasing = TRUE)[1:20]]
+top_ord_dat = prune_taxa(top_ord, ord_rel)
+
+class_counts = taxa_sums(class_rel)
+top_class = rownames(tax_table(class_rel))[order(class_counts, decreasing = TRUE)[1:20]]
+top_class_dat = prune_taxa(top_class, class_rel)
+phy_counts = taxa_sums(phy_rel)
+top_phy = rownames(tax_table(phy_rel))[order(phy_counts, decreasing = TRUE)[1:20]]
+top_phy_dat = prune_taxa(top_phy, phy_rel)
+
+gen_df = make_phy_df(top_gen_dat, rank = 'Genus', prop = FALSE)
+fam_df = make_phy_df(top_fam_dat, rank = 'Family', prop = FALSE)
+ord_df = make_phy_df(top_ord_dat, rank = "Order", prop = FALSE)
+class_df = make_phy_df(top_class_dat, rank = "Class", prop = FALSE)
+phy_df = make_phy_df(top_phy_dat, rank = 'Phylum', prop = FALSE)
+```
+
+```{r}
+prevdf <- apply(X = otu_table(dat_filt_glom), 
+                 MARGIN = ifelse(taxa_are_rows(dat_filt_glom), 
+                                 yes=1,
+                                 no=2),
+                 FUN = function(x){
+                   sum(x>0)
+                 })
+ # Add taxonomy and total read counts to this data.frame
+
+prevdf <- data.frame(Prevalence = prevdf, 
+                     TotalAbundance = taxa_sums(dat_filt_glom),
+                     tax_table(dat_filt_glom))
+```
+
+```{r TaxaBarCharts, include = TRUE}
+theme_set(theme_minimal())
+
+new_df <- gen_df %>% 
+  select(sampleID, participantID, para, sex, Mode, gain_cat, BMI_cat_0, birth_antibiotics, Count, 
+         Phylum, Class, Order, Family, Genus, Abundance)
+new_df$Genus <-  stringr::str_replace_all(new_df$Genus, "f_", " ")
+new_df$Genus <-  stringr::str_replace_all(new_df$Genus, "_", " ")
+
+new_df <- order_taxa(new_df, rank = "Genus")
+```
+
+```{r TaxaBarCharts, include = TRUE}
+new_df$participantID <- reorder(new_df$participantID, new_df$Count)
+
+gen_mean_tbf = new_df %>%
+  filter(Mode == "NSVD")%>%
+  plot_tax_bar('Genus', sample = "participantID", mean = FALSE, legloc = "bottom") +
+	facet_grid(~sex+para, scales = "free", space = "free",
+	           labeller = labeller(para = c("0" = "Primiparous", "1" = "Multiparous"),
+	                               sex = c("female" = "Female", "male" = "Male")))+
+  theme(axis.title.y = element_blank(), strip.background = element_blank(), 
+          axis.text.y = element_blank(), legend.text = element_text(size=12),
+          legend.title = element_blank(), axis.ticks = element_blank(),
+        panel.grid = element_blank(),
+        panel.border = element_blank())+
+  guides(fill=guide_legend(ncol=3, reverse = TRUE), color="none")
+gen_mean_tbf
+```
+
+```{r TaxaBarCharts, include = TRUE}
+ord_df <- ord_df %>% 
+  select(sampleID, participantID, para, sex, Mode, gain_cat, BMI_cat_0, birth_antibiotics, Count, 
+         Phylum, Class, Order, Abundance)
+
+ord_df %>%
+  filter(Mode == "NSVD", 
+         birth_antibiotics == 0,
+         Order == "Clostridiales")%>%
+  group_by(sex)%>%
+  summarise(mean = mean(Abundance),
+            n = n())
+```
+
+```{r TaxaBarCharts, include = TRUE}
+ord_df$participantID <- reorder(ord_df$participantID, ord_df$Count)
+
+ord_mean_tbf = ord_df %>%
+  filter(Mode == "NSVD")%>%
+  plot_tax_bar('Order', sample = "participantID", mean = FALSE, legloc = "bottom") +
+	facet_grid(~sex+para, scales = "free", space = "free",
+	           labeller = labeller(para = c("0" = "Primiparous", "1" = "Multiparous"),
+	                               sex = c("female" = "Female", "male" = "Male")))+
+  theme(axis.title.y = element_blank(), strip.background = element_blank(), 
+          axis.text.y = element_blank(), legend.text = element_text(size=12),
+          legend.title = element_blank(), axis.ticks = element_blank(),
+        panel.grid = element_blank(),
+        panel.border = element_blank())+
+  guides(fill=guide_legend(ncol=3, reverse = TRUE), color="none")
+ord_mean_tbf
+
+pdf(here("figures", "manuscript", "mec_order_tbp.pdf"), width = 8, height = 6)
+ord_mean_tbf
+dev.off()
+```

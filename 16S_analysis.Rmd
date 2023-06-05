@@ -1,0 +1,1778 @@
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(19891026)
+#load if not already loaded
+library("ProjectTemplate")
+load.project()
+devtools::load_all('~/GitHub/aftersl1p/')
+
+```
+
+###Set up for analyses
+
+Create phyloseq object
+```{r load data}
+asvtab <- asv_table %>%
+  tibble::column_to_rownames("X")
+asvtab <- as.matrix(asvtab)
+
+taxatab <- taxa_table %>%
+  tibble::column_to_rownames("X")
+taxatab <- as.matrix(taxatab)
+
+metadat <- metadata %>%
+  select(-X)
+metadat$rownames <- metadat$sampleID
+metadat <- metadat %>%
+  tibble::column_to_rownames("rownames")
+
+metadat %<>% mutate(para = factor(para),
+                    gain_cat = factor(gain_cat, levels = c("below", "within", "above")),
+                    BMI_cat_0 = factor(BMI_cat_0, levels = c("optimal", "overweight", "obese")))
+
+
+dat <- phyloseq(otu_table(asvtab, taxa_are_rows = TRUE),
+                tax_table(taxatab),
+                sample_data(metadat))
+```
+
+Remove host
+```{r clean data}
+#remove host
+summary(sample_sums(dat))
+host <- (taxatab[,'Kingdom'] == 'Eukaryota') |
+	(is.na(taxatab[,'Phylum'])) |
+	(!is.na(taxatab[,'Family']) & taxatab[,'Family'] == 'Mitochondria') |
+	(!(is.na(taxatab[,'Order'])) & taxatab[,'Order'] == 'Chloroplast')
+sum(host)
+length(host)
+
+keep <- !host
+dat_bact <- prune_taxa(keep, dat)
+dat_bact
+
+any(taxa_sums(dat_bact) < 2) #find any ASVs that have <2 reads in all samples
+sum(taxa_sums(dat_bact) < 2) # how many ASVs have <2 reads?
+
+
+any(sample_sums(dat_bact) < 1)
+sum(sample_sums(dat_bact) < 1)
+
+dat_bact0 <-  dat_bact #save original data as ps.all0 in case I want to go back
+
+dat_bact <-  prune_taxa(taxa_sums(dat_bact) > 1, dat_bact) # remove all empty taxa
+any(taxa_sums(dat_bact) < 2) # check they've been removed
+
+dat_bact <- prune_samples(sample_sums(dat_bact) > 0, dat_bact)
+any(sample_sums(dat_bact) < 1)
+
+dat_bact
+
+# Prop tax down
+dat_bact <- prop_tax_down(dat_bact,indic = FALSE, dbig = FALSE)
+
+# Make relative abundance
+dat_rel <- transform_sample_counts(dat_bact, function(x) x/sum(x))
+dat_rel
+
+summary(sample_sums(dat_bact))
+summary(taxa_sums(dat_bact))
+any(sample_sums(dat_rel) == 0)
+
+```
+
+```{r}
+#dat_rel_glom <- tax_glom(dat_rel, "Genus")
+
+prevdf <- apply(X = otu_table(dat_rel), 
+                 MARGIN = ifelse(taxa_are_rows(dat_rel), 
+                                 yes=1,
+                                 no=2),
+                 FUN = function(x){
+                   sum(x>0)
+                 })
+ # Add taxonomy and total read counts to this data.frame
+
+prevdf <- data.frame(Prevalence = prevdf, 
+                     TotalAbundance = taxa_sums(dat_rel),
+                     tax_table(dat_rel))
+
+plyr::ddply(prevdf, "Phylum", 
+            function(df1){
+              cbind(mean(df1$Prevalence),
+                    sum(df1$Prevalence))
+            })
+
+
+prevdf1 <- subset(prevdf, Phylum %in% get_taxa_unique(dat_rel, "Phylum"))
+
+ggplot(prevdf1, aes(TotalAbundance, Prevalence/nsamples(dat_rel), colour = Phylum)) +
+  geom_hline(yintercept = 0.02, alpha = 0.5, linetype = 2) +
+  geom_point(size = 2, alpha = 0.2) +
+  scale_x_log10()+
+  xlab("Total Abundance")+
+  ylab("Prevalence")+
+  facet_wrap(~Phylum)+
+  theme(legend.position = "none")
+ggsave(here::here("figures", "taxa_prevalence.jpeg"))
+```
+
+```{r}
+dat_filt <- dat_bact
+dat_rel_filt = prune_taxa(taxa_names(dat_filt), dat_rel)
+
+summary(sample_sums(dat_rel_filt))
+summary(taxa_sums(dat_filt))
+```
+
+###Maternal analyses
+
+```{r}
+mat_filt <- subset_samples(dat_filt, sampleTime %in% c("SM1", "SM2", "SM3", "SM4", "SM5"))
+
+mat_rel_filt <- subset_samples(dat_rel_filt, sampleTime %in% c("SM1", "SM2", "SM3", "SM4", "SM5"))
+
+# remove all empty taxa
+mat_filt <-  prune_taxa(taxa_sums(mat_filt) > 1, mat_filt) 
+
+mat_rel_filt <-  prune_taxa(taxa_names(mat_filt), mat_rel_filt)
+
+summary(taxa_sums(mat_rel_filt))
+```
+
+
+```{r maternal palettes}
+parity <- c("0" = "grey5", "1" = "grey40")
+
+parityshape <- c("0" = 1, "1" = 19)
+
+gwg_palette <- c("below" = "#ff6e54", "within" = "#955196", "above" = "#003f5c")
+bmi_palette <- c("optimal" = "#444e86", "overweight" = "#dd5182", "obese" = "#ffa600")
+
+colours20 <- c("#3a8fcf",
+"#ff2e50",
+"#83d7bc",
+"#afacda",
+"#5a40c5",
+"#00a28f",
+"#79d04c",
+"#da352d",
+"#037b18",
+"#530041",
+"#51726d",
+"#ff5c7f",
+"#d46026",
+"#e59a8f",
+"#003c1b",
+"#eb834b",
+"#004869",
+"#243928",
+"#ffb037",
+"#885965",
+"grey50")
+```
+
+## Alpha diversity
+
+```{r maternal alpha}
+theme_set(theme_classic())
+
+# Rarefy for alpha diversity
+dat_rare = rarefy_even_depth(mat_filt)
+
+summary(sample_sums(dat_rare))
+
+measures <- c("Shannon", "Observed")
+
+shann <- estimate_richness(dat_rare, measures = c("Shannon", "Observed"))
+data_0 <- cbind(sample_data(dat_rare), shann)
+```
+alpha diversity: sample time
+```{r}
+chisq.test(data_0$gain_cat, data_0$BMI_cat_0)
+
+chisq.test(data_0$para, data_0$gain_cat)
+
+chisq.test(data_0$para, data_0$BMI_cat_0)
+
+table(data_0$gain_cat, data_0$BMI_cat_0)
+
+
+anova.shann <- lmer(Shannon~ sampleTime + (1|participantID), data_0)
+anova(anova.shann)
+#emmeans(anova.shann, pairwise ~ sampleTime)
+```
+
+
+```{r}
+data_test <- data_0 %>%
+  filter(!is.na(gain_cat))
+
+#excluding sample time doesn't reduce fit
+
+m1 <- lmer(Shannon~ BMI_SM0*gain_cat*para + (1|participantID), data_test)
+m2 <- lmer(Shannon~ BMI_SM0*para + (1|participantID), data_test)
+m3 <- lmer(Shannon~ BMI_SM0*gain_cat + (1|participantID), data_test)
+m4 <- lmer(Shannon~ gain_cat*para + (1|participantID), data_test)
+
+anova(m1, m2, test = "Chisq")
+anova(m1, m3, test = "Chisq")
+anova(m1, m4, test = "Chisq")
+
+anova(m1)
+
+
+emmeans(m1, pairwise ~ gain_cat | para + BMI_SM0)
+```
+
+
+```{r}
+data_e <- data_0 %>%
+  filter(gain_cat == "above")
+
+lmer.preg <- lmer(Shannon ~ BMI_SM0 + (1|participantID), data_e)
+anova(lmer.preg)
+r.squaredGLMM(lmer.preg)
+
+data_e <- data_0 %>%
+  filter(gain_cat == "above" & para == 1)
+
+lmer.preg <- lmer(Shannon ~ BMI_SM0 + (1|participantID), data_e)
+anova(lmer.preg)
+r.squaredGLMM(lmer.preg)
+
+data_e <- data_0 %>%
+  filter(gain_cat == "above" & para == 0)
+
+lmer.preg <- lmer(Shannon ~ BMI_SM0 + (1|participantID), data_e)
+anova(lmer.preg)
+r.squaredGLMM(lmer.preg)
+```
+
+```{r}
+data <- data_0 %>%
+  filter(BMI_cat_0 == "optimal")
+
+lm <- lmer(Shannon ~ gain_cat*para + (1|participantID), data)
+anova(lm)
+emmeans(lm, pairwise ~ gain_cat | para)
+
+data_1 <- data_0 %>%
+  filter(BMI_cat_0 == "optimal" & para == 1)
+
+lm <- lmer(Shannon ~ gain_cat + (1|participantID), data_1)
+anova(lm)
+emmeans(lm, pairwise ~ gain_cat)
+
+data_2 <- data_0 %>%
+  filter(BMI_cat_0 == "optimal" & para == 0)
+
+lm <- lmer(Shannon ~ gain_cat + (1|participantID), data_2)
+anova(lm)
+emmeans(lm, pairwise ~ gain_cat)
+```
+
+```{r}
+```{r}
+df <- data_0%>%
+  group_by(participantID)%>%
+  dplyr::slice(1)
+
+table(df$para, df$gain_cat)
+```
+```
+
+
+#Figure 1
+
+```{r Fig 1a}
+p.alpha.gwg <- data_0 %>%
+  select("BMI_cat_0", "gain_cat", "Shannon", "Observed", "para", "sampleTime")%>%
+  pivot_longer(cols = all_of(measures),
+               names_to = "measure", 
+               values_to = "value", 
+               values_drop_na = TRUE)%>%
+  filter(measure == "Shannon" & BMI_cat_0 == "optimal")%>%
+  drop_na(gain_cat) %>%
+  ggplot(aes(x=gain_cat, y=value, colour = gain_cat, shape = para))+
+  geom_boxplot(outlier.size = 0, outlier.colour = "white")+
+  geom_jitter(width = 0.2, alpha = 0.7)+
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5), 
+               strip.background = element_blank(),
+               legend.position = "none", 
+               legend.background = element_blank(),
+               panel.spacing = unit(1,"lines"),
+        panel.grid = element_blank(),
+        panel.border = element_blank(),
+          axis.line = element_line(colour = "black")) +
+  geom_smooth(method="lm", se = FALSE, col = "black") + 
+  stat_cor(aes(label = paste(..rr.label.., ..p.label.., sep="*`,`~")),
+           label.x.npc = "center")+
+  ylab("Shannon Index")+
+  xlab("GWG category")+
+  scale_color_manual(values = gwg_palette)+
+   facet_grid(~para, scales = "free_y",
+              labeller = labeller(para = c("0"="Primiparous", "1"="Multiparous")))+
+  #facet_grid(~sampleTime)+
+  scale_shape_manual(values = c(19,8))+
+  guides(shape = "none")
+  
+    
+p.alpha.gwg
+```
+
+```{r Fig 1b}
+
+data_alpha <- data_0 %>%
+  select("sampleTime", "BMI_cat_0", "gain_cat", "weight_gain", "Observed", "Shannon", "participantID",  "BMI_SM0", "para")%>%
+  pivot_longer(cols = all_of(measures),
+               names_to = "measure", 
+               values_to = "value", 
+               values_drop_na = TRUE)%>%
+  filter(measure == "Shannon" &
+           gain_cat %in% c("above"))%>%
+  drop_na(gain_cat)
+
+p.alpha.bmi <- data_alpha %>%
+  ggplot(aes(x=BMI_SM0, y=value))+
+  geom_point(alpha=0.7, show.legend = TRUE, aes(shape = para, colour = BMI_cat_0))+
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    legend.position = c(0.85, 0.2), 
+    legend.background = element_blank(),
+    panel.border = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(colour = "black"), 
+    strip.background = element_blank(),
+    legend.text=element_text(colour = c("grey5", "grey50"))
+    ) +
+  geom_smooth(data = data_alpha[which(data_alpha$para == 0),],
+              method="lm", se = FALSE,
+              show.legend = FALSE, colour = "grey5") + 
+  geom_smooth(data = data_alpha[which(data_alpha$para == 1),],
+              method="lm", se = FALSE,
+              show.legend = FALSE, colour = "grey50") +
+  ylab("Shannon Index")+
+  xlab("Pre-pregnancy BMI")+
+  facet_grid(~gain_cat,
+             labeller = labeller(gain_cat = c("above"=" ")))+
+  scale_shape_manual(values = c(19,8), 
+                     labels = c("Primiparous", "Multiparous"),
+                     name = "Parity")+
+  scale_colour_manual(values = bmi_palette)+
+  guides(alpha = "none", colour = "none",
+         shape = guide_legend(byrow = TRUE, keyheight = 0.2,
+                              override.aes = list(color = c("grey5", "grey50"))))
+    
+p.alpha.bmi
+```
+
+Beta-diversity, proportionally normalized
+```{r}
+library("ggplot2")
+library("ggpubr")
+theme_set(theme_bw())
+
+dat_rel_bmi <- subset_samples(mat_rel_filt, gain_cat %in% c("below", "within", "above"))
+
+dist <- phyloseq::distance(dat_rel_bmi, method = "bray") #calc dist matrix
+
+iMDS <- ordinate(dat_rel_bmi, "PCoA", distance = dist, weighted=TRUE)
+s <- plot_scree(iMDS) + theme(axis.text.x = element_text(size=0), axis.title = element_text(size=16), panel.grid = element_blank(), axis.text.y = element_text(size=14))
+s
+```
+
+
+```{r}
+df = as(sample_data(dat_rel_bmi), "data.frame")
+d = phyloseq::distance(dat_rel_bmi, "bray")
+adonis(d ~ para*BMI_cat_0*gain_cat + participantID, df, permutations = 9999)
+with(df, adonis2(d ~ para*BMI_cat_0*gain_cat + sampleTime + participantID, data = df, permutations = 9999, strata = sampleTime))
+
+
+beta <- betadisper(d, df$BMI_cat_0)
+permutest(beta)
+```
+
+
+```{r}
+dat_0 <- subset_samples(dat_rel_bmi, para == 0)
+
+df = as(sample_data(dat_0), "data.frame")
+d = phyloseq::distance(dat_0, "bray")
+# ps.adonis = adonis(d ~ BMI_cat_0*gain_cat + participantID, df, permutations = 9999)
+# ps.adonis
+with(df, adonis2(d ~ BMI_cat_0*gain_cat + participantID, data = df, permutations = 9999, strata = sampleTime))
+
+dat_0 <- subset_samples(dat_rel_bmi, para == 1)
+
+df = as(sample_data(dat_0), "data.frame")
+d = phyloseq::distance(dat_0, "bray")
+# ps.adonis = adonis(d ~ BMI_cat_0*gain_cat + participantID, df, permutations = 9999)
+# ps.adonis
+with(df, adonis2(d ~ BMI_cat_0*gain_cat + participantID, data = df, permutations = 9999, strata = sampleTime))
+```
+
+```{r Fig 1d}
+p.pcoa.bmi <- dat_rel_bmi %>%
+  plot_ordination(iMDS, color = "BMI_cat_0", shape = "para", axes = c(1,2)) +
+  facet_grid(~para, switch = "y", 
+             labeller = labeller(para = c("0"="Primiparous", "1"="Multiparous")))+
+  stat_ellipse(type = "t", linetype = 3, geom = "polygon", alpha = 0.05, aes(fill=BMI_cat_0), show.legend = FALSE, level=0.9)  +
+  geom_point(alpha=0.7, na.rm = TRUE, show.legend = TRUE) + 
+  theme(plot.title = element_blank(), 
+        legend.position = "bottom",
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-10,0,0,0),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), strip.background = element_blank(), 
+        axis.text = element_blank(), axis.ticks = element_blank(),
+        #axis.title = element_text(size=14), strip.text = element_text(size=14), legend.text = element_text(size=14)
+        )+
+    scale_color_manual(values = bmi_palette, name = "Pre-pregnancy BMI",
+                    labels = c("<25", "25-30", ">30"))+
+  scale_fill_manual(values = bmi_palette, name = "Pre-pregnancy BMI",
+                    labels = c("<25", "25-30", ">30"))+
+  scale_shape_manual(values = c(19,8))+
+  guides(shape = "none")
+p.pcoa.bmi$layers[1] = NULL
+p.pcoa.bmi
+```
+```{r}
+dat_rel_primi <- subset_samples(dat_rel_bmi, para == 0)
+
+df = as(sample_data(dat_rel_primi), "data.frame")
+d = phyloseq::distance(dat_rel_primi, "bray")
+#adonis(d ~ BMI_cat_0*sampleTime + participantID, df, permutations = 9999)
+with(df, adonis2(d ~ BMI_cat_0 + participantID, data = df, permutations = 9999, strata = sampleTime))
+
+
+beta <- betadisper(d, df$BMI_cat_0)
+permutest(beta)
+```
+
+```{r}
+dat_rel_primi <- subset_samples(dat_rel_bmi, para == 1)
+
+df = as(sample_data(dat_rel_primi), "data.frame")
+d = phyloseq::distance(dat_rel_primi, "bray")
+# ps.adonis = adonis(d ~ BMI_cat_0*sampleTime + participantID, df, permutations = 9999)
+# ps.adonis
+with(df, adonis2(d ~ BMI_cat_0*sampleTime + participantID, data = df, permutations = 9999, strata = sampleTime))
+
+
+beta <- betadisper(d, df$BMI_cat_0)
+permutest(beta)
+```
+
+```{r Fig 1c}
+p.pcoa.gwg <- dat_rel_bmi %>%
+  plot_ordination(iMDS, color = "gain_cat", shape = "para", axes = c(1,2)) +
+  facet_grid(~para, switch = "y",
+             labeller = labeller(para = c("0"="Primiparous", "1"="Multiparous")))+
+  stat_ellipse(type = "t", linetype = 3, geom = "polygon", alpha = 0.05, aes(fill=gain_cat), show.legend = FALSE, level=0.9)  +
+  geom_point(alpha=0.7, na.rm = TRUE, show.legend = TRUE) + 
+  theme(plot.title = element_blank(), 
+        legend.position = "bottom", 
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-10,0,0,0),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), strip.background = element_blank(), 
+        axis.text = element_blank(), axis.ticks = element_blank(),
+        #axis.title = element_text(size=14), strip.text = element_text(size=14), legend.text = element_text(size=14)
+        )+
+    scale_color_manual(values = gwg_palette, name = "GWG category")+
+  scale_fill_manual(values = gwg_palette, name = "GWG category")+
+  scale_shape_manual(values = c(19,8))+
+  guides(shape = "none")
+p.pcoa.gwg$layers[1] = NULL
+p.pcoa.gwg
+```
+
+```{r}
+dist <- phyloseq::distance(mat_rel_filt, method = "bray")
+
+dist.m <- melt(as.matrix(dist))
+
+dist.m <- dist.m %>%
+  filter(as.character(Var1) != as.character(Var2)) %>%
+  mutate_if(is.factor, as.character)
+
+sd <- sample_data(mat_rel_filt)
+
+sd <- as.data.frame(sd)
+
+sd <- sd[,c("sampleID", "participantID", "sampleTime", "gain_cat", 
+            "BMI_cat_0", "BMI_SM0", "weight_gain", "para")]
+
+colnames(sd) <- c("Var1", "participantID_1", "sampleTime_1", "gain_cat_1", 
+                  "BMI_cat_0_1", "BMI_SM0_1", "weight_gain_1", "para_1")
+dist.sd <- left_join(dist.m, sd, by = "Var1")
+
+colnames(sd) <- c("Var2", "participantID_2", "sampleTime_2", "gain_cat_2",  
+                  "BMI_cat_0_2", "BMI_SM0_2", "weight_gain_2", "para_2")
+dist.sd <- left_join(dist.sd, sd, by = "Var2")
+
+dist.sd.2 <- dist.sd %>%
+  filter(participantID_1 == participantID_2 &
+           gain_cat_1 %in% c("below", "within", "above"))
+```
+
+```{r}
+dist.sd.prim <- dist.sd.2 %>%
+  filter(para_1 == 0)
+
+lm0 <- lmer(value ~ BMI_SM0_1*gain_cat_1*sampleTime_1 + (1|participantID_1), dist.sd.prim)
+anova(lm0)
+lm0 <- lmer(value ~ BMI_SM0_1 + (1|participantID_1), dist.sd.prim)
+anova(lm0)
+r.squaredGLMM(lm0)
+
+dist.sd.mult <- dist.sd.2 %>%
+  filter(para_1 == 1)
+
+lm1 <- lmer(value ~ BMI_SM0_1*gain_cat_1*sampleTime_1 + (1|participantID_1), dist.sd.mult)
+anova(lm1)
+lm1 <- lmer(value ~ BMI_SM0_1 + (1|participantID_1), dist.sd.mult)
+anova(lm1)
+r.squaredGLMM(lm1)
+
+```
+
+```{r Fig 1e}
+p.beta <- dist.sd.2 %>%
+  ggplot(aes(x = BMI_SM0_1, y = value, colour = para_1, shape = para_1))+
+  geom_point(aes(alpha=0.7, colour=BMI_cat_0_1), show.legend = TRUE)+
+  geom_smooth(data = dist.sd.2[which(dist.sd.2$para_1 == 0),],
+              method="lm", se = FALSE,
+              show.legend = FALSE, colour = "grey5") + 
+  geom_smooth(data = dist.sd.2[which(dist.sd.2$para_1 == 1),],
+              method="lm", se = FALSE,
+              show.legend = FALSE, colour = "grey50") +
+  stat_cor(data = dist.sd.2[which(dist.sd.2$para_1 == 0),],
+           aes(label = paste(..rr.label.., ..p.label.., sep="*`,`~")),
+           label.x.npc = "left", label.y.npc = 0.08,
+           size = 3, colour = "grey5",
+           show.legend = FALSE)+
+  stat_cor(data = dist.sd.2[which(dist.sd.2$para_1 == 1),],
+           aes(label = paste(..rr.label.., ..p.label.., sep="*`,`~")),
+           label.x.npc = "left", label.y.npc = 0.02,
+           size = 3, colour = "grey50",
+           show.legend = FALSE)+
+  scale_y_continuous(limits = c(0,1))+
+    facet_grid(~sampleTime_1, 
+               labeller=labeller(sampleTime_1 = c("SM1" = "1st Trimester", 
+                                                  "SM2" = "2nd Trimester",
+                                                  "SM3" = "3rd Trimester", 
+                                                  "SM4" = "Delivery",
+                                                  "SM5" = "6 months pp"))) +
+    theme(strip.background = element_blank(),
+          panel.grid= element_blank(),
+          panel.border = element_blank(),
+          axis.line = element_line(colour = "black"),
+          legend.position = c(0.88,0.2),
+          legend.title = element_blank(),
+          legend.background = element_rect(colour = NA, fill = NA),
+        legend.margin=margin(0,0,0,0)) +
+  labs(y = "Bray-Curtis Dissimilarity", x="pBMI")+
+  scale_shape_manual(values = c(19,8), 
+                     labels = c("Primiparous", "Multiparous"))+
+  scale_color_manual(values = bmi_palette)+
+  guides(alpha = "none", colour = "none", 
+         shape = guide_legend(byrow = TRUE, keyheight = 0.2,
+                              override.aes = list(color = c("grey5", "grey50"))))
+p.beta
+```
+
+```{r Figure 1 assembly}
+
+p1 <- cowplot::plot_grid(p.alpha.gwg, p.alpha.bmi,
+                         labels = c("a", "b"),
+                         align = 'v',
+                         rel_widths = c(1,1.5),
+                         axis = "bt")
+
+p2 <- cowplot::plot_grid(p.pcoa.gwg, p.pcoa.bmi,
+                         labels = c("c", "d"),
+                         align = 'v',
+                         rel_widths = c(1,1),
+                         axis = "bt")
+
+
+fig1 <- cowplot::plot_grid(p1, p2, p.beta,
+                           ncol = 1,
+                           #align = 'h',
+                           labels = c('','','e'),
+                           label_x = 0, label_y = 1,
+                           hjust = -0.5, vjust=1,
+                           rel_heights = c(1.1,1,1.2)
+                           )
+fig1
+
+ggsave(here::here("figures", "fig1.pdf"), width = 8, height = 10.5, units = "in")
+```
+
+#Figures 3 and 4
+```{r TBFPrep}
+gen_rel = tax_glom(mat_rel_filt, 'Genus')
+fam_rel = tax_glom(gen_rel, 'Family')
+class_rel = tax_glom(fam_rel, "Class")
+phy_rel = tax_glom(class_rel, 'Phylum')
+
+gen_counts = taxa_sums(gen_rel)
+top_gen = rownames(tax_table(gen_rel))[order(gen_counts, decreasing = TRUE)[1:20]]
+top_gen_dat = prune_taxa(top_gen, gen_rel)
+fam_counts = taxa_sums(fam_rel)
+top_fam = rownames(tax_table(fam_rel))[order(fam_counts, decreasing = TRUE)[1:20]]
+top_fam_dat = prune_taxa(top_fam, fam_rel)
+class_counts = taxa_sums(class_rel)
+top_class = rownames(tax_table(class_rel))[order(class_counts, decreasing = TRUE)[1:20]]
+top_class_dat = prune_taxa(top_class, class_rel)
+phy_counts = taxa_sums(phy_rel)
+top_phy = rownames(tax_table(phy_rel))[order(phy_counts, decreasing = TRUE)[1:20]]
+top_phy_dat = prune_taxa(top_phy, phy_rel)
+
+gen_df = make_phy_df(top_gen_dat, rank = 'Genus', prop = FALSE)
+#gen_df$EADP <- factor(gen_df$EADP, levels = c("No EADP", "EADP"))
+fam_df = make_phy_df(top_fam_dat, rank = 'Family', prop = FALSE)
+class_df = make_phy_df(top_class_dat, rank = "Class", prop = FALSE)
+phy_df = make_phy_df(top_phy_dat, rank = 'Phylum', prop = FALSE)
+```
+```{r TaxaBarCharts, include = TRUE}
+new_df <- gen_df
+new_df$Genus <-  stringr::str_replace_all(new_df$Genus, "f_", " ")
+new_df$Genus <-  stringr::str_replace_all(new_df$Genus, "_", " ")
+
+new_df <- order_taxa(new_df, rank = "Genus")
+
+gen_relabun = new_df %>%
+  drop_na(BMI_cat_0) %>%
+  filter(#gain_cat == "above" & 
+           Genus != "Other")%>%
+  ggplot()+
+  aes(
+    x = Genus,
+    y = Abundance*100,
+    colour = BMI_cat_0
+  ) +
+  stat_summary(geom = "point", fun.y = "mean", 
+               position = position_dodge(width=0.5), alpha = 0)+
+  stat_summary(fun.data = "mean_se", position = position_dodge(width=0.5), aes(group=BMI_cat_0, colour = BMI_cat_0),
+               alpha=0.7, show.legend = FALSE)+
+	facet_grid(~para, space = "free", 
+	           labeller = labeller(para = c("0" = "Primiparous", "1" = "Multiparous")))+
+  coord_flip()+
+  theme(
+    legend.position = c(0.9,0.75),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(colour = colours20[1:20]),
+    strip.background = element_blank(),
+    legend.background = element_blank()
+  )+
+  ylab("Relative Abundance (%)")+
+  scale_x_discrete(limits=rev, labels = label_wrap(20))+
+  scale_y_continuous(trans="pseudo_log")+
+  scale_color_manual(values = bmi_palette, 
+                     name = "pBMI", 
+                     labels = c("<25", "25-30", ">30"))+
+  guides(alpha = "none", shape = "none", colour = guide_legend(override.aes = list(alpha = 0.7)))
+gen_relabun
+```
+```{r TaxaBarCharts, include = TRUE}
+gen_mean_tbf = gen_df %>%
+  drop_na(BMI_cat_0) %>%
+  # filter((gain_cat == "above" & BMI_cat_0 %in% c("optimal", "overweight", "obese"))|
+  #          (BMI_cat_0 == "optimal" & gain_cat %in% c("below", "within", "above")))%>%
+  filter(gain_cat == "above", 
+         sampleTime != "SM5")%>%
+  plot_tax_bar('Genus', sample = "BMI_cat_0", mean = TRUE, colours = colours20) +
+	facet_grid(~para, scales = "free", space = "free",
+	           labeller = labeller(para = c("0" = "Primiparous", "1" = "Multiparous")))+
+  scale_x_discrete(name = "pBMI",
+                   labels = c("optimal" = "<25", "overweight" = "25-30", "obese" = ">30"))+
+  scale_y_continuous(expand = c(0,0))+
+  theme(axis.title.y = element_blank(), strip.background = element_blank(), 
+          axis.text.y = element_blank(), 
+        axis.text.x = element_text(angle=0, hjust = 0.5, colour = bmi_palette),
+        axis.title.x = element_text(),
+        legend.position = "none",
+        panel.grid = element_blank(),
+        panel.border = element_blank(),
+          axis.ticks = element_blank())+
+  guides(fill=guide_legend(ncol=1, reverse = FALSE), color="none")
+gen_mean_tbf
+```
+```{r}
+fig3a <- cowplot::plot_grid(gen_mean_tbf, gen_relabun,
+                         labels = c("a", "b"),
+                         rel_widths = c(1,2)
+                         )
+
+fig3a
+```
+
+```{r TaxaBarCharts, include = TRUE}
+new_df <- gen_df
+new_df
+new_df$Genus <-  stringr::str_replace_all(new_df$Genus, "_", " ")
+
+new_df <- order_taxa(new_df, rank = "Genus")
+
+gwg_relabun = new_df %>%
+  drop_na(gain_cat) %>%
+  filter(BMI_cat_0 == "optimal" & 
+           Genus != "Other")%>%
+  ggplot()+
+  aes(
+    x = Genus,
+    y = Abundance*100,
+    colour = gain_cat
+  ) + 
+  stat_summary(geom = "point", fun.y = "mean", 
+               position = position_dodge(width=0.5), alpha = 0)+
+  stat_summary(fun.data = "mean_se", position = position_dodge(width=0.5), aes(group=gain_cat, colour = gain_cat),
+               alpha=0.7, show.legend = FALSE)+
+	facet_grid(~para, space = "free", 
+	           labeller = labeller(para = c("0" = "Primiparous", "1" = "Multiparous")))+
+  coord_flip()+
+  theme(
+    legend.position = c(0.9,0.8),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(colour = colours20[1:20]),
+    strip.background = element_blank(),
+    legend.background = element_blank()
+  )+
+  ylab("Relative Abundance (%)")+
+  scale_x_discrete(limits=rev, labels = label_wrap(20))+
+  scale_y_continuous(trans="pseudo_log")+
+  scale_color_manual(values = gwg_palette, 
+                     name = "GWG", 
+                     labels = c("below", "within", "above"))+
+  guides(alpha = "none", shape = "none", colour = guide_legend(override.aes = list(alpha = 0.7)))
+gwg_relabun
+```
+```{r TaxaBarCharts, include = TRUE}
+gwg_mean_tbf = gen_df %>%
+  drop_na(gain_cat) %>%
+  filter(BMI_cat_0 == "optimal", sampleTime != "SM5")%>%
+  plot_tax_bar('Genus', sample = "gain_cat", mean = TRUE, colours = colours20) +
+	facet_grid(~para, scales = "free", space = "free",
+	           labeller = labeller(para = c("0" = "Primiparous", "1" = "Multiparous")))+
+  scale_x_discrete(name = "GWG",
+                   labels = c("optimal" = "<25", "overweight" = "25-30", "obese" = ">30"))+
+  scale_y_continuous(expand = c(0,0))+
+  theme(axis.title.y = element_blank(), strip.background = element_blank(), 
+          axis.text.y = element_blank(), 
+        axis.text.x = element_text(angle=0, hjust = 0.5, colour = gwg_palette),
+        axis.title.x = element_text(),
+        legend.position = "none",
+        panel.grid = element_blank(),
+        panel.border = element_blank(),
+          axis.ticks = element_blank())+
+  guides(fill=guide_legend(ncol=1, reverse = FALSE), color="none")
+gwg_mean_tbf
+```
+
+
+```{r}
+fig4a <- cowplot::plot_grid(gwg_mean_tbf, gwg_relabun,
+                         labels = c("a", "b"),
+                         rel_widths = c(1,2)
+                         )
+
+fig4a
+```
+
+#DESeq2: significant Genera
+
+Glom OTU counts into genus counts:
+```{r}
+ps.glom = tax_glom(mat_filt, "Genus")
+```
+
+
+DESeq2 conversion and call (code section 18):
+```{r}
+library("DESeq2")
+packageVersion("DESeq2")
+alpha = 0.05
+
+```
+
+
+```{r}
+dat_glom <- ps.glom %>%
+  subset_samples(!(is.na(BMI_cat_0)) & 
+                   gain_cat == "above"&
+                   sampleTime != "SM5"
+                 )
+
+diagdds = phyloseq::phyloseq_to_deseq2(dat_glom, ~BMI_cat_0*para+sampleTime)
+diagdds = DESeq2::DESeq(diagdds)
+resultsNames(diagdds)
+
+res <- as.data.frame(results(diagdds, c("BMI_cat_0", "overweight", "optimal")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ow = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ow$contrast <- "over-opt"
+
+res <- as.data.frame(results(diagdds, c("BMI_cat_0", "obese", "optimal")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ob = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ob$contrast <- "ob-opt"
+
+res <- as.data.frame(results(diagdds, c("para", "1", "0")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_para = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_para$contrast <- "para"
+
+sigtab_bmi <- rbind(sigtab_ow, sigtab_ob, sigtab_para)
+
+write.table(sigtab_bmi, here::here("results", "BMI_cat_0xpara+sampleTime_20221121.csv"), sep = ",")
+```
+
+```{r}
+dat_glom <- ps.glom %>%
+  subset_samples(!(is.na(BMI_cat_0)) & 
+                   gain_cat == "above"&
+                   para == 0&
+                   sampleTime != "SM5"
+                 )
+
+diagdds = phyloseq::phyloseq_to_deseq2(dat_glom, ~BMI_cat_0+sampleTime)
+diagdds = DESeq2::DESeq(diagdds)
+resultsNames(diagdds)
+
+res <- as.data.frame(results(diagdds, c("BMI_cat_0", "overweight", "optimal")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ow = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ow$contrast <- "over-opt"
+
+res <- as.data.frame(results(diagdds, c("BMI_cat_0", "obese", "optimal")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ob = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ob$contrast <- "ob-opt"
+
+sigtab_para0 <- rbind(sigtab_ow, sigtab_ob)
+
+#write.table(sigtab_para0, here::here("results", "sigtab_primip-pbmi_20221121.csv"), sep = ",")
+```
+
+```{r}
+dat_glom <- ps.glom %>%
+  subset_samples(!(is.na(BMI_cat_0)) & 
+                   gain_cat == "above"&
+                   para == 1&
+                   sampleTime != "SM5"
+                 )
+
+diagdds = phyloseq::phyloseq_to_deseq2(dat_glom, ~BMI_cat_0+sampleTime)
+diagdds = DESeq2::DESeq(diagdds)
+resultsNames(diagdds)
+
+res <- as.data.frame(results(diagdds, c("BMI_cat_0", "overweight", "optimal")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ow = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ow$contrast <- "over-opt"
+
+res <- as.data.frame(results(diagdds, c("BMI_cat_0", "obese", "optimal")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ob = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ob$contrast <- "ob-opt"
+
+sigtab_para1 <- rbind(sigtab_ow, sigtab_ob)
+
+
+sigtab_bmi$para <- "Overall"
+sigtab_para0$para <- "Primiparous"
+sigtab_para1$para <- "Multiparous"
+
+sigtab2 <- rbind(sigtab_bmi, sigtab_para0, sigtab_para1)
+
+sigtab2 <- sigtab2 %>%
+  group_by(Genus)%>%
+  filter(max(baseMean) > 150)
+
+write.table(sigtab2, here::here("results", "sigtab-pbmibypara_20221121.csv"), sep = ",")
+```
+
+
+
+GGPlot summary of results: 
+```{r}
+sigtab2 <- sigtab2 %>%
+  #filter(baseMean > 150) %>%
+  mutate(para = factor(para, levels = c("Primiparous", "Multiparous", "Overall")))
+
+#Phylum order
+x = tapply(sigtab2$log2FoldChange, sigtab2$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtab2$Phylum = factor(as.character(sigtab2$Phylum), levels = names(x))
+#Order order
+x = tapply(sigtab2$log2FoldChange, sigtab2$Order, function(x) max(x))
+x = sort(x, TRUE)
+sigtab2$Order = factor(as.character(sigtab2$Order), levels = names(x))
+#Family order
+x = tapply(sigtab2$log2FoldChange, sigtab2$Family, function(x) max(x))
+x = sort(x, TRUE)
+sigtab2$Family = factor(as.character(sigtab2$Family), levels = names(x))
+#Genus order
+x = tapply(sigtab2$log2FoldChange, sigtab2$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab2$Genus = factor(as.character(sigtab2$Genus), levels = names(x))
+```
+
+
+```{r}
+
+sigtab2 %<>%
+  mutate(Genus = factor(gsub("f_", "", Genus))) %>%
+  mutate(Genus = factor(gsub("o_", "", Genus))) %>%
+  mutate(Genus = factor(gsub("_", " ", Genus)))
+
+myColors <- rep("black", length(levels(sigtab2$Genus)))
+names(myColors) <- levels(sigtab2$Genus)
+myColors[names(myColors)=="Prevotella 9"] <- "#530041"
+myColors[names(myColors)=="Ruminococcaceae UCG-014"] <- "#885965"
+myColors[names(myColors)=="Roseburia"] <- "#da352d"
+myColors[names(myColors)=="Lachnospira"] <- "#243928"
+myColors[names(myColors)=="Ruminococcaceae"] <- "#d46026"
+myColors[names(myColors)=="Anaerostipes"] <- "#e59a8f"
+myColors[names(myColors)=="Blautia"] <- "#83d7bc"
+myColors[names(myColors)=="Bacteroides"] <- "#3a8fcf"
+myColors[names(myColors)=="Enterococcus"] <- "#5d653d"
+ myColors[names(myColors)=="Lachnospiraceae"] <- "#00a28f"
+ myColors[names(myColors)=="Blautia"] <- "#83d7bc"
+ myColors[names(myColors)=="Bifidobacterium"] <- "#ffb037"
+ myColors[names(myColors)=="Intestinibacter"] <- "#65422e"
+ myColors[names(myColors)=="Bacteroides"] <- "#3a8fcf"
+
+gendiff <- sigtab2 %>%
+  filter(contrast %in% c("over-opt", "ob-opt"))%>%
+  ggplot()+
+  aes(
+    x = reorder(Genus, -log2FoldChange), 
+    y = log2FoldChange, 
+    colour = Genus,
+    shape = para
+  ) +
+  geom_point(
+    aes(size = baseMean)
+  )+
+  theme(
+    strip.background = element_blank(),
+    axis.title.y = element_blank()
+  )+
+  geom_hline(yintercept = 0)+
+  scale_x_discrete(labels = label_wrap(40))+
+  coord_flip()+
+  facet_grid(~factor(contrast, levels = c("over-opt", "ob-opt"), 
+                     labels = c("over-opt" = "pBMI 25-30 vs pBMI < 25", "ob-opt" = "pBMI > 30 vs pBMI < 25")))+
+  ylab("Log2 Fold Change")+
+  scale_colour_manual(values = myColors)+
+  scale_shape_manual(name = "Parity", values = c(1,8,19))+
+  guides(size = guide_legend(title = "Mean Abundance"), colour = "none")
+
+gendiff
+```
+
+```{r}
+fig3 <- cowplot::plot_grid(fig3a, gendiff,
+                         labels = c("", "c"),
+                         rel_heights = c(1.25,1),
+                         nrow = 2
+                         )
+
+fig3
+
+ggsave(here::here("figures", "fig3.pdf"), width = 8, height = 10.5, units = "in")
+```
+
+
+```{r}
+dat_glom <- ps.glom %>%
+  subset_samples(!(is.na(gain_cat)) & 
+                   BMI_cat_0 == "optimal"&
+                   sampleTime != "SM5"
+                 )
+
+diagdds = phyloseq::phyloseq_to_deseq2(dat_glom, ~gain_cat*para+sampleTime)
+diagdds = DESeq2::DESeq(diagdds)
+resultsNames(diagdds)
+
+res <- as.data.frame(results(diagdds, c("gain_cat", "above", "within")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ow = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ow$contrast <- "above-within"
+
+res <- as.data.frame(results(diagdds, c("gain_cat", "below", "within")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ob = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ob$contrast <- "below-within"
+
+res <- as.data.frame(results(diagdds, c("para", "1", "0")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_para = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_para$contrast <- "para"
+
+sigtab_gwg <- rbind(sigtab_ow, sigtab_ob, sigtab_para)
+```
+
+```{r}
+dat_glom <- ps.glom %>%
+  subset_samples(!(is.na(gain_cat)) & 
+                   BMI_cat_0 == "optimal"&
+                   para == 0&
+                   sampleTime != "SM5"
+                 )
+
+diagdds = phyloseq::phyloseq_to_deseq2(dat_glom, ~gain_cat+sampleTime)
+diagdds = DESeq2::DESeq(diagdds)
+resultsNames(diagdds)
+
+res <- as.data.frame(results(diagdds, c("gain_cat", "above", "within")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ow = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ow$contrast <- "above-within"
+
+res <- as.data.frame(results(diagdds, c("gain_cat", "below", "within")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ob = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ob$contrast <- "below-within"
+
+sigtab_gwg_para0 <- rbind(sigtab_ow, sigtab_ob)
+```
+
+```{r}
+dat_glom <- ps.glom %>%
+  subset_samples(!(is.na(gain_cat)) & 
+                   BMI_cat_0 == "optimal"&
+                   para == 1&
+                   sampleTime != "SM5"
+                 )
+
+diagdds = phyloseq::phyloseq_to_deseq2(dat_glom, ~gain_cat+sampleTime)
+diagdds = DESeq2::DESeq(diagdds)
+resultsNames(diagdds)
+
+res <- as.data.frame(results(diagdds, c("gain_cat", "above", "within")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ow = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ow$contrast <- "above-within"
+
+res <- as.data.frame(results(diagdds, c("gain_cat", "below", "within")))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_ob = cbind(as(sigtab, "data.frame"), as(tax_table(dat_glom)[rownames(sigtab), ], "matrix"))
+sigtab_ob$contrast <- "below-within"
+
+sigtab_gwg_para1 <- rbind(sigtab_ow, sigtab_ob)
+
+sigtab_gwg$para <- "Overall"
+sigtab_gwg_para0$para <- "Primiparous"
+sigtab_gwg_para1$para <- "Multiparous"
+
+sigtab2 <- rbind(sigtab_gwg, sigtab_gwg_para0, sigtab_gwg_para1)
+
+
+sigtab2 <- sigtab2 %>%
+  group_by(Genus)%>%
+  filter(max(baseMean) > 150)
+
+write.table(sigtab2, here::here("results", "sigtab_gwg_20221121.csv"), sep = ",")
+```
+
+GGPlot summary of results: 
+```{r}
+sigtab2 <- sigtab2 %>%
+ # filter(baseMean > 150)%>%
+  mutate(contrast = recode(contrast, "above-within" = "GWG above vs. within",
+                           "below-within" = "GWG below vs. within")) %>%
+  mutate(para = factor(para, levels = c("Primiparous", "Multiparous", "Overall")))
+
+#Phylum order
+x = tapply(sigtab2$log2FoldChange, sigtab2$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtab2$Phylum = factor(as.character(sigtab2$Phylum), levels = names(x))
+#Order order
+x = tapply(sigtab2$log2FoldChange, sigtab2$Order, function(x) max(x))
+x = sort(x, TRUE)
+sigtab2$Order = factor(as.character(sigtab2$Order), levels = names(x))
+#Family order
+x = tapply(sigtab2$log2FoldChange, sigtab2$Family, function(x) max(x))
+x = sort(x, TRUE)
+sigtab2$Family = factor(as.character(sigtab2$Family), levels = names(x))
+#Genus order
+x = tapply(sigtab2$log2FoldChange, sigtab2$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab2$Genus = factor(as.character(sigtab2$Genus), levels = names(x))
+```
+
+
+```{r}
+sigtab2 %<>%
+  mutate(Genus = factor(gsub("stricto_", " ", Genus))) %>%
+  mutate(Genus = factor(gsub("f_", "", Genus))) %>%
+  mutate(Genus = factor(gsub("o_", "", Genus))) %>%
+  mutate(Genus = factor(gsub("_", " ", Genus)))
+
+myColors <- rep("grey50", length(levels(sigtab2$Genus)))
+names(myColors) <- levels(sigtab2$Genus)
+ myColors[names(myColors)=="Prevotella 9"] <- "#530041"
+ myColors[names(myColors)=="Ruminococcaceae UCG-014"] <- "#885965"
+ myColors[names(myColors)=="Ruminococcaceae UCG-002"] <- "#003c1b"
+ myColors[names(myColors)=="Lachnospiraceae"] <- "#5a40c5"
+ myColors[names(myColors)=="Ruminococcaceae"] <- "#d46026"
+ myColors[names(myColors)=="Christensenellaceae R-7 group"] <- "#eb834b"
+ myColors[names(myColors)=="Blautia"] <- "#83d7bc"
+ myColors[names(myColors)=="Fusicatenibacter"] <- "#004869"
+ myColors[names(myColors)=="Bifidobacterium"] <- "#ffb037"
+ myColors[names(myColors)=="Lachnospiraceae NK4A136 group"] <- "#037b18"
+
+gwgdiff <- sigtab2 %>%
+  filter(contrast %in% c(
+                      "GWG below vs. within",
+                      "GWG above vs. within"
+                        ))%>%
+  ggplot()+
+  aes(
+    x = reorder(Genus, -log2FoldChange), 
+    y = log2FoldChange, 
+    colour = Genus,
+    shape = para
+  ) +
+  geom_point(
+    aes(size = baseMean)
+  )+
+  theme(
+    strip.background = element_blank(),
+    axis.title.y = element_blank()
+  )+
+  geom_hline(yintercept = 0)+
+  scale_x_discrete(labels = label_wrap(40))+
+  coord_flip()+
+  facet_grid(~contrast, 
+                     scales = "free", space = "free")+
+  ylab("Log2 Fold Change")+
+  scale_colour_manual(values = myColors)+
+  scale_shape_manual(name = "Parity", values = c(1,8,19))+
+  guides(size = guide_legend(title = "Mean Abundance"), colour = "none")
+
+gwgdiff
+```
+
+```{r}
+fig4 <- cowplot::plot_grid(fig4a, gwgdiff,
+                         labels = c("", "c"),
+                         rel_heights = c(1.25,1),
+                         nrow = 2
+                         )
+
+fig4
+
+ggsave(here::here("figures", "fig4.pdf"), width = 8, height = 10.5, units = "in")
+```
+
+
+
+###Infant analyses
+
+```{r}
+inf_filt <- subset_samples(dat_filt, sampleTime == "SF5")
+
+inf_rel_filt <- subset_samples(dat_rel_filt, sampleTime == "SF5")
+
+# remove all empty taxa
+inf_filt <-  prune_taxa(taxa_sums(inf_filt) > 1, inf_filt) 
+
+inf_rel_filt <-  prune_taxa(taxa_names(inf_filt), inf_rel_filt)
+
+summary(taxa_sums(inf_rel_filt))
+```
+
+```{r infant palettes}
+gwg_palette <- c("below" = "#ff6e54", "within" = "#955196", "above" = "#003f5c")
+bmi_palette <- c("optimal" = "#444e86", "overweight" = "#dd5182", "obese" = "#ffa600")
+
+colours20 <- c("#ffb037",
+"#3a8fcf",
+"#ceadc4",
+"#a93c60",
+"#00a28f",
+"#ffc3a4",
+"#c1d0ad",
+"#5d653d",
+"#8e3b48",
+"#d31a1a",
+"#ac5736",
+"#241d62",
+"#ff6464",
+"#83d7bc",
+"#979abc",
+"#ce875d",
+"#7da23e",
+"#65422e",
+"#b068bb",
+"#7b989e",
+ "grey50")
+```
+
+##Alpha diversity
+
+```{r GetAlpha}
+dat_rare = rarefy_even_depth(inf_filt)
+
+measures <- c("Shannon", "Observed")
+
+shann <- estimate_richness(dat_rare, measures = c("Shannon", "Observed"))
+data_0 <- cbind(sample_data(dat_rare), shann)
+
+data <- data_0 %>%
+  filter(birth_antibiotics == 0 & antibiotics_SM3 == 0)
+
+lm <- lm(Observed ~ sex, data)
+anova(lm)
+```
+
+```{r}
+table(data$para)
+```
+
+
+```{r}
+lm <- lm(Observed ~ gain_cat*BMI_cat_0, data)
+anova(lm)
+em <- emmeans(lm, ~  gain_cat | BMI_cat_0)
+pairs(em)
+
+em <- emmeans(lm, ~ BMI_cat_0 | gain_cat)
+pairs(em)
+```
+
+
+#GWG and alpha diversity
+
+```{r GetAlpha}
+data_o <- data %>%
+  filter(
+    BMI_SM0 < 25 & 
+      #para == 1 &
+      !is.na(gain_cat))
+
+lm <- lm(Shannon ~ gain_cat, data_o)
+anova(lm)
+em <- emmeans(lm, ~ gain_cat)
+pairs(em)
+
+lm <- lm(Observed ~ gain_cat, data_o)
+anova(lm)
+em <- emmeans(lm, ~ gain_cat)
+pairs(em)
+
+```
+```{r GetAlpha}
+data_o <- data %>%
+  filter(
+    gain_cat == "above" & 
+      #para == 1 &
+      !is.na(gain_cat))
+
+lm <- lm(Shannon ~ BMI_cat_0, data_o)
+anova(lm)
+em <- emmeans(lm, ~ BMI_cat_0)
+pairs(em)
+
+lm <- lm(Observed ~ BMI_cat_0, data_o)
+anova(lm)
+em <- emmeans(lm, ~ BMI_cat_0)
+pairs(em)
+
+```
+
+
+Plot alpha diversity
+```{r}
+alpha <- data %>%
+  select("sampleTime", "BMI_cat_0", "gain_cat", "sex", "Observed", "Shannon", "participantID",  "birth_antibiotics", "solidfood", "breast_feed_now", "para")%>%
+  pivot_longer(cols = all_of(measures),
+               names_to = "measure", 
+               values_to = "value", 
+               values_drop_na = TRUE)%>%
+  mutate(BMI_cat_0 = recode(BMI_cat_0,"optimal"="<25","overweight"=">25", "obese" = ">25"))%>%
+  # filter(#measure == "Shannon" & 
+  #          (BMI_cat_0 == "<25" | gain_cat == "above") 
+  #          )%>%
+  drop_na(gain_cat) %>%
+  ggplot(aes(x=gain_cat, y=value, colour=gain_cat, shape = BMI_cat_0))+
+  geom_boxplot(outlier.size = 0, show.legend = FALSE)+
+  #geom_jitter(width = 0.2, alpha = 0.4)+
+  geom_point(position=position_jitterdodge(jitter.width = 0.5), size = 2,alpha = 0.7)+
+  facet_wrap(~measure, scales = "free_y")+
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size=12), 
+               axis.title.x = element_blank(),
+               strip.background = element_blank(), 
+        strip.text = element_text(size=12),
+               #legend.justification = c(0,0),
+               legend.position = "bottom", 
+               legend.background = element_blank(),
+               legend.margin = margin(0,0,0,0),
+               panel.spacing = unit(1,"lines"),
+        panel.grid = element_blank(),
+        panel.border = element_blank(),
+          axis.line = element_line(colour = "black"))+
+  scale_color_manual(values = gwg_palette,
+                     name = "GWG")+
+  scale_shape_manual(values = c(19,18), 
+                     labels = c("pBMI < 25", "pBMI > 25"),
+                     name = "pBMI")+
+  #scale_y_continuous(expand = c(0,0))+
+  guides(colour = "none")
+    
+alpha
+#ggsave(here("figures","micro", "alpha_infant.jpeg"), width = 7, height = 6, units = "in")
+```
+#Taxa bar plots
+```{r TBFPrep}
+
+dat_filt_glom <- tax_glom(inf_rel_filt, "Genus")
+
+dat_filt_glom <- dat_filt_glom %>%
+  subset_samples(birth_antibiotics != 1 & antibiotics_SM3 == 0)
+
+gen_rel = tax_glom(dat_filt_glom, 'Genus')
+fam_rel = tax_glom(gen_rel, 'Family')
+class_rel = tax_glom(fam_rel, "Class")
+phy_rel = tax_glom(class_rel, 'Phylum')
+
+gen_counts = taxa_sums(gen_rel)
+top_gen = rownames(tax_table(gen_rel))[order(gen_counts, decreasing = TRUE)[1:20]]
+top_gen_dat = prune_taxa(top_gen, gen_rel)
+fam_counts = taxa_sums(fam_rel)
+top_fam = rownames(tax_table(fam_rel))[order(fam_counts, decreasing = TRUE)[1:20]]
+top_fam_dat = prune_taxa(top_fam, fam_rel)
+class_counts = taxa_sums(class_rel)
+top_class = rownames(tax_table(class_rel))[order(class_counts, decreasing = TRUE)[1:20]]
+top_class_dat = prune_taxa(top_class, class_rel)
+phy_counts = taxa_sums(phy_rel)
+top_phy = rownames(tax_table(phy_rel))[order(phy_counts, decreasing = TRUE)[1:20]]
+top_phy_dat = prune_taxa(top_phy, phy_rel)
+
+gen_df = make_phy_df(top_gen_dat, rank = 'Genus', prop = FALSE)
+fam_df = make_phy_df(top_fam_dat, rank = 'Family', prop = FALSE)
+class_df = make_phy_df(top_class_dat, rank = "Class", prop = FALSE)
+phy_df = make_phy_df(top_phy_dat, rank = 'Phylum', prop = FALSE)
+```
+
+```{r TaxaBarCharts, include = TRUE}
+theme_set(theme_minimal())
+
+new_df <- gen_df
+new_df$Genus <-  stringr::str_replace_all(new_df$Genus, "f_", " ")
+new_df$Genus <-  stringr::str_replace_all(new_df$Genus, "_", " ")
+
+new_df <- order_taxa(new_df, rank = "Genus")
+
+gen_relabun = new_df %>%
+  drop_na(gain_cat) %>%
+  filter(
+         Genus != "Other")%>%
+  ggplot()+
+  aes(
+    x = Genus,
+    y = Abundance*100,
+    colour = gain_cat
+  ) + 
+  stat_summary(fun.data = "mean_se", position = position_dodge(width=0.5), aes(group=gain_cat, colour = gain_cat),
+               alpha=0.7)+
+	facet_grid(~para, space = "free", 
+	           labeller = labeller(para = c("0" = "Primiparous", "1" = "Multiparous")))+
+  coord_flip()+
+  theme(
+    legend.position = c(0.9,0.8),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(colour = colours20[1:20])
+  )+
+  ylab("Relative Abundance (%)")+
+  scale_x_discrete(limits=rev, labels = label_wrap(20))+
+  scale_y_continuous(trans="pseudo_log")+
+  scale_color_manual(values = gwg_palette, 
+                     name = "GWG", 
+                     labels = c("below", "within", "above"))+
+  guides(alpha = "none", shape = "none")
+gen_relabun
+```
+
+```{r TaxaBarCharts, include = TRUE}
+gen_mean_tbf = new_df %>%
+  drop_na(para, gain_cat) %>%
+  plot_tax_bar('Genus', sample = "gain_cat", mean = TRUE, legloc = "right", colour = colours20) +
+	facet_grid(~para, scales = "free", space = "free",
+	           labeller = labeller(para = c("0" = "Primiparous", "1" = "Multiparous")))+
+  scale_x_discrete(name = "GWG")+
+  scale_y_continuous(expand = c(0,0))+
+  theme(axis.title.y = element_blank(), strip.background = element_blank(), 
+          axis.text.y = element_blank(), 
+        axis.text.x = element_text(angle=0, hjust = 0.5, colour = bmi_palette),
+        axis.title.x = element_text(),
+        legend.position = "none",
+        panel.grid = element_blank(),
+        panel.border = element_blank(),
+          axis.ticks = element_blank())+
+  guides(fill=guide_legend(ncol=1, reverse = FALSE), color="none")
+gen_mean_tbf
+```
+
+
+```{r}
+fig7a <- cowplot::plot_grid(gen_mean_tbf, gen_relabun,
+                         labels = c("a", "b"),
+                         rel_widths = c(1,2)
+                         )
+
+fig7a
+```
+
+
+## PCoA
+
+Beta-diversity, proportionally normalized
+
+
+```{r}
+library("ggplot2")
+library("ggpubr")
+theme_set(theme_bw())
+
+dat_filt_beta <- subset_samples(inf_filt, gain_cat %in% c("below", "within", "above") & 
+                                  birth_antibiotics == 0 & 
+                                  antibiotics_SM3 == 0
+                                )
+
+dat_filt_glom <- tax_glom(dat_filt_beta, "Genus")
+```
+
+
+```{r}
+dist <- phyloseq::distance(dat_filt_glom, method = "bray") #calc dist matrix
+
+iMDS <- ordinate(dat_filt_glom, "PCoA", distance = dist, weighted=TRUE)
+s <- plot_scree(iMDS) + theme(axis.text.x = element_text(size=0), axis.title = element_text(size=16), panel.grid = element_blank(), axis.text.y = element_text(size=14))
+s
+
+
+pcoa <- dat_filt_glom %>%
+  plot_ordination(
+    iMDS, color = "gain_cat", axes = c(1,2)
+                  ) +
+  facet_grid(~para, labeller = labeller(para = c("0" = "Primiparous", "1" = "Multiparous")))+
+  stat_ellipse(type = "t", linetype = 3, geom = "polygon", alpha = 0.05, aes(group = gain_cat, fill=gain_cat), show.legend = FALSE, level=0.9)  +
+  geom_point(na.rm = TRUE, size=2) + 
+  theme(plot.title = element_blank(), legend.position = "bottom", panel.grid.major = element_blank(), 
+        axis.text = element_blank(),
+        panel.grid.minor = element_blank(), strip.background = element_blank(), axis.ticks = element_blank(),
+        legend.box.margin = margin(-10,0,0,0), axis.title = element_text(size=12))+
+    scale_color_manual(values = gwg_palette, name = "GWG")+
+  scale_fill_manual(values = gwg_palette, name = "GWG")+
+  guides(colour = guide_legend(override.aes = list(size=2)))
+pcoa$layers[1] = NULL
+pcoa
+```
+
+```{r}
+fig6 <- cowplot::plot_grid(alpha, pcoa,
+                           labels = c("a", "b"))
+
+fig6
+```
+```{r}
+df = as(sample_data(dat_filt_glom), "data.frame")
+d = phyloseq::distance(dat_filt_glom, "bray")
+ps.adonis = adonis2(d ~ gain_cat*para, df, permutations = 9999)
+ps.adonis
+
+beta <- betadisper(d, df$gain_cat)
+permutest(beta)
+```
+
+```{r}
+dat_filt_0 <- dat_filt_glom %>%
+  subset_samples(para == 0)
+
+df = as(sample_data(dat_filt_0), "data.frame")
+d = phyloseq::distance(dat_filt_0, "bray")
+ps.adonis = adonis2(d ~ gain_cat, df, permutations = 9999)
+ps.adonis
+
+beta <- betadisper(d, df$gain_cat)
+permutest(beta)
+```
+
+```{r}
+dat_filt_1 <- dat_filt_glom %>%
+  subset_samples(para == 1)
+
+df = as(sample_data(dat_filt_1), "data.frame")
+d = phyloseq::distance(dat_filt_1, "bray")
+ps.adonis = adonis2(d ~ gain_cat, df, permutations = 9999)
+ps.adonis
+
+beta <- betadisper(d, df$gain_cat)
+permutest(beta)
+```
+
+#DESeq2: significant Genera
+```{r}
+dat_filt_glom <- tax_glom(dat_filt, "Genus")
+
+dat_filt_glom <- dat_filt_glom %>%
+  subset_samples(birth_antibiotics != 1 & antibiotics_SM3 == 0)
+
+prevdf <- apply(X = otu_table(dat_filt_glom), 
+                 MARGIN = ifelse(taxa_are_rows(dat_filt_glom), 
+                                 yes=1,
+                                 no=2),
+                 FUN = function(x){
+                   sum(x>0)
+                 })
+ # Add taxonomy and total read counts to this data.frame
+
+prevdf <- data.frame(Prevalence = prevdf, 
+                     TotalAbundance = taxa_sums(dat_filt_glom),
+                     tax_table(dat_filt_glom))
+```
+
+DESeq2 conversion and call (code section 18):
+```{r}
+# Define prevalence threshold as 5% of total samples
+prevalenceThreshold = 0.05*nsamples(dat_filt_glom)
+prevalenceThreshold
+
+# Execute prevalence filter, using `prune_taxa()` function
+keepTaxa = rownames(prevdf)[(prevdf$Prevalence >= prevalenceThreshold)]
+dat_glom_prev = prune_taxa(keepTaxa, dat_filt_glom)
+```
+
+```{r}
+prevdf <- apply(X = otu_table(dat_glom_prev), 
+                 MARGIN = ifelse(taxa_are_rows(dat_glom_prev), 
+                                 yes=1,
+                                 no=2),
+                 FUN = function(x){
+                   sum(x>0)
+                 })
+ # Add taxonomy and total read counts to this data.frame
+
+prevdf <- data.frame(Prevalence = prevdf, 
+                     TotalAbundance = taxa_sums(dat_glom_prev),
+                     tax_table(dat_glom_prev))
+```
+
+```{r}
+library("DESeq2")
+packageVersion("DESeq2")
+alpha = 0.1
+```
+
+```{r}
+dat_deseq <- subset_samples(dat_glom_prev, 
+                            gain_cat %in% c("below", "within", "above")
+                            )
+
+diagdds = phyloseq::phyloseq_to_deseq2(dat_deseq, ~gain_cat)
+diagdds = DESeq2::DESeq(diagdds)
+resultsNames(diagdds)
+
+res <- results(diagdds, c("gain_cat", "above", "within"))
+sigtab = res[which(res$padj < alpha), ]
+sigtab_gwg <- cbind(as(sigtab, "data.frame"), as(prevdf[rownames(sigtab), ], "matrix"))
+sigtab_gwg$contrast <- "above-within"
+sigtab_gwg$group <- "all"
+
+res <- results(diagdds, c("gain_cat", "below", "within"))
+sigtab = res[which(res$padj < alpha), ]
+sigtab_b <- cbind(as(sigtab, "data.frame"), as(prevdf[rownames(sigtab), ], "matrix"))
+sigtab_b$contrast <- "below-within"
+sigtab_b$group <- "all"
+```
+
+```{r}
+dat_deseq <- dat_glom_prev
+                            
+diagdds = phyloseq::phyloseq_to_deseq2(dat_deseq, ~para)
+diagdds = DESeq2::DESeq(diagdds)
+resultsNames(diagdds)
+
+
+res <- results(diagdds, c("para", "1", "0"))
+sigtab = res[which(res$padj < alpha), ]
+sigtab_para <- cbind(as(sigtab, "data.frame"), as(prevdf[rownames(sigtab), ], "matrix"))
+sigtab_para$contrast <- "para"
+sigtab_para$group <- "all"
+```
+
+```{r}
+dat_deseq <- dat_glom_prev
+
+diagdds = phyloseq::phyloseq_to_deseq2(dat_deseq, ~BMI_cat_0)
+diagdds = DESeq2::DESeq(diagdds)
+resultsNames(diagdds)
+
+res <- results(diagdds, c("BMI_cat_0", "overweight", "optimal"))
+sigtab = res[which(res$padj < alpha), ]
+sigtab_ow <- cbind(as(sigtab, "data.frame"), as(prevdf[rownames(sigtab), ], "matrix"))
+sigtab_ow$contrast <- "ow-op"
+
+res <- results(diagdds, c("BMI_cat_0", "obese", "optimal"))
+sigtab = res[which(res$padj < alpha), ]
+sigtab_ob <- cbind(as(sigtab, "data.frame"), as(prevdf[rownames(sigtab), ], "matrix"))
+sigtab_ob$contrast <- "ob-op"
+
+sigtab_bmi <- rbind(sigtab_ow, sigtab_ob)
+sigtab_bmi$group <- "all"
+```
+
+
+```{r}
+dat_deseq <- subset_samples(dat_glom_prev, 
+                            gain_cat %in% c("below", "within", "above")&
+                              para == 1 
+                            )
+
+diagdds = phyloseq::phyloseq_to_deseq2(dat_deseq, ~gain_cat)
+diagdds = DESeq2::DESeq(diagdds)
+resultsNames(diagdds)
+
+res <- results(diagdds, c("gain_cat", "above", "within"))
+res_gwg <- cbind(as(res, "data.frame"), as(prevdf[rownames(res), ], "matrix"))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_1 <- cbind(as(sigtab, "data.frame"), as(prevdf[rownames(sigtab), ], "matrix"))
+sigtab_1$contrast <- "above-within"
+sigtab_1$group <- "para1"
+```
+
+```{r}
+dat_deseq <- subset_samples(dat_glom_prev, 
+                           gain_cat %in% c("below", "within", "above")&
+                              para == 0
+                           )
+
+diagdds = phyloseq::phyloseq_to_deseq2(dat_deseq, ~gain_cat)
+diagdds = DESeq2::DESeq(diagdds)
+resultsNames(diagdds)
+
+res <- results(diagdds, c("gain_cat", "above", "within"))
+sigtab = res[which(res$padj < alpha), ]
+sigtab
+sigtab_0 <- cbind(as(sigtab, "data.frame"), as(prevdf[rownames(sigtab), ], "matrix"))
+sigtab_0$contrast <- "above-within"
+sigtab_0$group <- "para0"
+```
+
+```{r}
+sigtab <- rbind(sigtab_gwg, sigtab_b, sigtab_para, sigtab_1, sigtab_0, sigtab_bmi)
+```
+
+GGPlot summary of results: 
+```{r}
+sigtab <- sigtab %>%
+  filter(baseMean > 50)%>%
+  mutate(contrast = recode(contrast, "above-within" = "GWG above vs. GWG within",
+                                "ow-op" = "pBMI >25 vs pBMI <25",
+                                "ob-op" = "pBMI >25 vs pBMI <25",
+                                "para" = "Multiparous vs Primiparous"),
+         group = recode(group, "all" = "Overall",
+                        "para0" = "Primiparous",
+                        "para1" = "Multiparous"))%>%
+  mutate(group = factor(group, levels = c("Primiparous", "Multiparous", "Overall")))
+
+#Phylum order
+x = tapply(sigtab$log2FoldChange, sigtab$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Phylum = factor(as.character(sigtab$Phylum), levels = names(x))
+#Order order
+x = tapply(sigtab$log2FoldChange, sigtab$Order, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Order = factor(as.character(sigtab$Order), levels = names(x))
+#Family order
+x = tapply(sigtab$log2FoldChange, sigtab$Family, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Family = factor(as.character(sigtab$Family), levels = names(x))
+#Genus order
+x = tapply(sigtab$log2FoldChange, sigtab$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtab$Genus = factor(as.character(sigtab$Genus), levels = names(x))
+```
+
+```{r}
+myColors <- rep("grey50", length(levels(sigtab$Genus)))
+names(myColors) <- levels(sigtab$Genus)
+ myColors[names(myColors)=="Enterococcus"] <- "#c1d0ad"
+ myColors[names(myColors)=="Lachnospiraceae"] <- "#00a28f"
+ myColors[names(myColors)=="Blautia"] <- "#ff6464"
+ myColors[names(myColors)=="Bifidobacterium"] <- "#ffb037"
+ myColors[names(myColors)=="Intestinibacter"] <- "#65422e"
+ myColors[names(myColors)=="Bacteroides"] <- "#3a8fcf"
+  myColors[names(myColors)=="Akkermansia"] <- "#83d7bc"
+ myColors[names(myColors)=="Enterobacter"] <- "#65422e"
+
+gendiff <- sigtab %>%
+  mutate(Genus = factor(gsub("_", " ", Genus))) %>%
+  filter(contrast != "below-within")%>%
+  ggplot()+
+  aes(
+    x = reorder(Genus, -log2FoldChange), 
+    y = log2FoldChange, 
+    colour = Genus, 
+    shape = group
+  ) +
+  geom_point(
+    aes(size = baseMean)
+  )+
+  theme(
+    strip.background = element_blank(),
+    axis.title.y = element_blank(),
+    panel.spacing.y = unit(2, "lines"),
+    strip.text = element_blank()
+  )+
+  geom_hline(yintercept = 0)+
+  scale_x_discrete(labels = label_wrap(20))+
+  coord_flip()+
+  facet_grid(contrast~., 
+                     labeller = label_wrap_gen(width = 15, multi_line = TRUE),
+                     scales = "free", space = "free")+
+  ylab("Log2 Fold Change")+
+  scale_size_continuous(range = c(2,5), breaks = c(100, 1000, 5000,20000))+
+  scale_colour_manual(values = myColors)+
+  scale_shape_manual(values = c(1, 8, 19))+
+  guides(size = guide_legend(title = "Mean Abundance"), colour = "none", shape = guide_legend(title = "Parity"))
+
+gendiff
+```
+
+```{r}
+fig7 <- cowplot::plot_grid(fig7a, gendiff,
+                         labels = c("", "c"),
+                         rel_heights = c(1.25,1),
+                         nrow = 2
+                         )
+
+fig7
+
+#ggsave(here("figures", "manuscript", "fig6.pdf"), width = 8, height = 10.5, units = "in")
+```
