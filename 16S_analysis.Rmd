@@ -30,12 +30,15 @@ metadat <- metadat %>%
 
 metadat %<>% mutate(para = factor(para),
                     gain_cat = factor(gain_cat, levels = c("below", "within", "above")),
-                    BMI_cat_0 = factor(BMI_cat_0, levels = c("optimal", "overweight", "obese")))
+                    BMI_cat_0 = factor(BMI_cat_0, levels = c("optimal", "overweight", "obese")),
+                    peri_anti = ifelse(birth_antibiotics != 0, "Yes", ifelse(antibiotics_SM3 != 0, "Yes", "No")))
 
 
 dat <- phyloseq(otu_table(asvtab, taxa_are_rows = TRUE),
                 tax_table(taxatab),
                 sample_data(metadat))
+
+dat
 ```
 
 Remove host
@@ -189,7 +192,7 @@ measures <- c("Shannon", "Observed")
 shann <- estimate_richness(dat_rare, measures = c("Shannon", "Observed"))
 data_0 <- cbind(sample_data(dat_rare), shann)
 ```
-alpha diversity: sample time
+
 ```{r}
 chisq.test(data_0$gain_cat, data_0$BMI_cat_0)
 
@@ -199,7 +202,11 @@ chisq.test(data_0$para, data_0$BMI_cat_0)
 
 table(data_0$gain_cat, data_0$BMI_cat_0)
 
+table(data_0$GDM, !is.na(data_0$butyric_acid_value_rel))
+```
 
+alpha diversity: sample time
+```{r}
 anova.shann <- lmer(Shannon~ sampleTime + (1|participantID), data_0)
 anova(anova.shann)
 #emmeans(anova.shann, pairwise ~ sampleTime)
@@ -225,8 +232,64 @@ anova(m1)
 
 
 emmeans(m1, pairwise ~ gain_cat | para + BMI_SM0)
-```
 
+lmer.preg <- lmer(Shannon ~ BMI_SM0 + (1|participantID), data_0)
+anova(lmer.preg)
+r.squaredGLMM(lmer.preg)
+```
+###Figure S1
+
+```{r}
+data_alpha <- data_0 %>%
+  select("sampleTime", "BMI_cat_0", "gain_cat", "weight_gain", "GDM", 
+         "Observed", "Shannon", "participantID",  "BMI_SM0", "para")%>%
+  pivot_longer(cols = all_of(measures),
+               names_to = "measure", 
+               values_to = "value", 
+               values_drop_na = TRUE)%>%
+  filter(measure == "Shannon")%>%
+  drop_na(gain_cat)
+
+p.s1 <- data_alpha %>%
+  #filter(GDM != "ID")%>%
+  #filter(GDM != "dietary")%>%
+  ggplot(aes(x=BMI_SM0, y=value))+
+  # geom_boxplot(aes(colour = gain_cat), outlier.colour = NA,
+  #              position = position_dodge2(preserve = "single"))+
+  geom_point(alpha=0.7, show.legend = TRUE, aes(colour = gain_cat))+ 
+  geom_smooth(data = data_alpha[which(data_alpha$gain_cat == "above"),],
+              method="lm", se = FALSE,
+              colour = "#003f5c",
+              show.legend = FALSE
+              ) +
+  stat_cor(data = data_alpha[which(data_alpha$gain_cat == "above"),],
+           aes(label = paste(..rr.label.., ..p.label.., sep="*`,`~")),
+           label.x.npc = "left", label.y.npc = 0.08,
+           size = 3, colour = "#003f5c",
+           show.legend = FALSE)+
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    panel.border = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(colour = "black"), 
+    strip.background = element_blank(),
+    legend.position = "bottom"
+    ) +
+  ylab("Shannon Index")+
+  xlab("Pre-pregnancy BMI")+
+  facet_grid(~sampleTime,
+             labeller = labeller(sampleTime = c("SM1" = "1st Trimester", 
+                                                  "SM2" = "2nd Trimester",
+                                                  "SM3" = "3rd Trimester", 
+                                                  "SM4" = "Delivery",
+                                                  "SM5" = "6 months pp")))+
+   scale_colour_manual(values = gwg_palette,
+                      name = "GWG")
+    
+p.s1
+
+#ggsave(here("figures", "manuscript", "figs1.pdf"), width = 8, height = 4, units = "in")
+```
 
 ```{r}
 data_e <- data_0 %>%
@@ -275,99 +338,16 @@ emmeans(lm, pairwise ~ gain_cat)
 ```
 
 ```{r}
-```{r}
 df <- data_0%>%
   group_by(participantID)%>%
   dplyr::slice(1)
 
 table(df$para, df$gain_cat)
 ```
-```
+
 
 
 #Figure 1
-
-```{r Fig 1a}
-p.alpha.gwg <- data_0 %>%
-  select("BMI_cat_0", "gain_cat", "Shannon", "Observed", "para", "sampleTime")%>%
-  pivot_longer(cols = all_of(measures),
-               names_to = "measure", 
-               values_to = "value", 
-               values_drop_na = TRUE)%>%
-  filter(measure == "Shannon" & BMI_cat_0 == "optimal")%>%
-  drop_na(gain_cat) %>%
-  ggplot(aes(x=gain_cat, y=value, colour = gain_cat, shape = para))+
-  geom_boxplot(outlier.size = 0, outlier.colour = "white")+
-  geom_jitter(width = 0.2, alpha = 0.7)+
-  theme(axis.text.x = element_text(angle = 0, hjust = 0.5), 
-               strip.background = element_blank(),
-               legend.position = "none", 
-               legend.background = element_blank(),
-               panel.spacing = unit(1,"lines"),
-        panel.grid = element_blank(),
-        panel.border = element_blank(),
-          axis.line = element_line(colour = "black")) +
-  geom_smooth(method="lm", se = FALSE, col = "black") + 
-  stat_cor(aes(label = paste(..rr.label.., ..p.label.., sep="*`,`~")),
-           label.x.npc = "center")+
-  ylab("Shannon Index")+
-  xlab("GWG category")+
-  scale_color_manual(values = gwg_palette)+
-   facet_grid(~para, scales = "free_y",
-              labeller = labeller(para = c("0"="Primiparous", "1"="Multiparous")))+
-  #facet_grid(~sampleTime)+
-  scale_shape_manual(values = c(19,8))+
-  guides(shape = "none")
-  
-    
-p.alpha.gwg
-```
-
-```{r Fig 1b}
-
-data_alpha <- data_0 %>%
-  select("sampleTime", "BMI_cat_0", "gain_cat", "weight_gain", "Observed", "Shannon", "participantID",  "BMI_SM0", "para")%>%
-  pivot_longer(cols = all_of(measures),
-               names_to = "measure", 
-               values_to = "value", 
-               values_drop_na = TRUE)%>%
-  filter(measure == "Shannon" &
-           gain_cat %in% c("above"))%>%
-  drop_na(gain_cat)
-
-p.alpha.bmi <- data_alpha %>%
-  ggplot(aes(x=BMI_SM0, y=value))+
-  geom_point(alpha=0.7, show.legend = TRUE, aes(shape = para, colour = BMI_cat_0))+
-  theme(
-    axis.text.x = element_text(angle = 0, hjust = 0.5),
-    legend.position = c(0.85, 0.2), 
-    legend.background = element_blank(),
-    panel.border = element_blank(),
-    panel.grid = element_blank(),
-    axis.line = element_line(colour = "black"), 
-    strip.background = element_blank(),
-    legend.text=element_text(colour = c("grey5", "grey50"))
-    ) +
-  geom_smooth(data = data_alpha[which(data_alpha$para == 0),],
-              method="lm", se = FALSE,
-              show.legend = FALSE, colour = "grey5") + 
-  geom_smooth(data = data_alpha[which(data_alpha$para == 1),],
-              method="lm", se = FALSE,
-              show.legend = FALSE, colour = "grey50") +
-  ylab("Shannon Index")+
-  xlab("Pre-pregnancy BMI")+
-  facet_grid(~gain_cat,
-             labeller = labeller(gain_cat = c("above"=" ")))+
-  scale_shape_manual(values = c(19,8), 
-                     labels = c("Primiparous", "Multiparous"),
-                     name = "Parity")+
-  scale_colour_manual(values = bmi_palette)+
-  guides(alpha = "none", colour = "none",
-         shape = guide_legend(byrow = TRUE, keyheight = 0.2,
-                              override.aes = list(color = c("grey5", "grey50"))))
-    
-p.alpha.bmi
-```
 
 Beta-diversity, proportionally normalized
 ```{r}
@@ -394,6 +374,9 @@ with(df, adonis2(d ~ para*BMI_cat_0*gain_cat + sampleTime + participantID, data 
 
 beta <- betadisper(d, df$BMI_cat_0)
 permutest(beta)
+
+beta <- betadisper(d, df$gain_cat)
+permutest(beta)
 ```
 
 
@@ -406,6 +389,7 @@ d = phyloseq::distance(dat_0, "bray")
 # ps.adonis
 with(df, adonis2(d ~ BMI_cat_0*gain_cat + participantID, data = df, permutations = 9999, strata = sampleTime))
 
+
 dat_0 <- subset_samples(dat_rel_bmi, para == 1)
 
 df = as(sample_data(dat_0), "data.frame")
@@ -415,7 +399,7 @@ d = phyloseq::distance(dat_0, "bray")
 with(df, adonis2(d ~ BMI_cat_0*gain_cat + participantID, data = df, permutations = 9999, strata = sampleTime))
 ```
 
-```{r Fig 1d}
+```{r Fig 1a}
 p.pcoa.bmi <- dat_rel_bmi %>%
   plot_ordination(iMDS, color = "BMI_cat_0", shape = "para", axes = c(1,2)) +
   facet_grid(~para, switch = "y", 
@@ -440,6 +424,25 @@ p.pcoa.bmi <- dat_rel_bmi %>%
 p.pcoa.bmi$layers[1] = NULL
 p.pcoa.bmi
 ```
+
+```{r}
+p.pcoa.bmi <- dat_rel_bmi %>%
+  plot_ordination(iMDS, color = "GDM", axes = c(1,2)) +
+  geom_point(alpha=0.7, na.rm = TRUE, show.legend = TRUE) + 
+  theme(plot.title = element_blank(), 
+        legend.position = "bottom",
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-10,0,0,0),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), strip.background = element_blank(), 
+        axis.text = element_blank(), axis.ticks = element_blank(),
+        #axis.title = element_text(size=14), strip.text = element_text(size=14), legend.text = element_text(size=14)
+        )
+p.pcoa.bmi$layers[1] = NULL
+p.pcoa.bmi
+```
+
+
 ```{r}
 dat_rel_primi <- subset_samples(dat_rel_bmi, para == 0)
 
@@ -505,14 +508,14 @@ sd <- sample_data(mat_rel_filt)
 sd <- as.data.frame(sd)
 
 sd <- sd[,c("sampleID", "participantID", "sampleTime", "gain_cat", 
-            "BMI_cat_0", "BMI_SM0", "weight_gain", "para")]
+            "BMI_cat_0", "BMI_SM0", "weight_gain", "para", "GDM")]
 
 colnames(sd) <- c("Var1", "participantID_1", "sampleTime_1", "gain_cat_1", 
-                  "BMI_cat_0_1", "BMI_SM0_1", "weight_gain_1", "para_1")
+                  "BMI_cat_0_1", "BMI_SM0_1", "weight_gain_1", "para_1", "GDM_1")
 dist.sd <- left_join(dist.m, sd, by = "Var1")
 
 colnames(sd) <- c("Var2", "participantID_2", "sampleTime_2", "gain_cat_2",  
-                  "BMI_cat_0_2", "BMI_SM0_2", "weight_gain_2", "para_2")
+                  "BMI_cat_0_2", "BMI_SM0_2", "weight_gain_2", "para_2", "GDM_2")
 dist.sd <- left_join(dist.sd, sd, by = "Var2")
 
 dist.sd.2 <- dist.sd %>%
@@ -543,6 +546,8 @@ r.squaredGLMM(lm1)
 
 ```{r Fig 1e}
 p.beta <- dist.sd.2 %>%
+  #filter(GDM_1 != "ID")%>% 
+  #filter(GDM_1 != "dietary")%>%
   ggplot(aes(x = BMI_SM0_1, y = value, colour = para_1, shape = para_1))+
   geom_point(aes(alpha=0.7, colour=BMI_cat_0_1), show.legend = TRUE)+
   geom_smooth(data = dist.sd.2[which(dist.sd.2$para_1 == 0),],
@@ -583,6 +588,37 @@ p.beta <- dist.sd.2 %>%
   guides(alpha = "none", colour = "none", 
          shape = guide_legend(byrow = TRUE, keyheight = 0.2,
                               override.aes = list(color = c("grey5", "grey50"))))
+p.beta
+```
+
+```{r Fig 1e}
+p.beta <- dist.sd.2 %>%
+  ggplot(aes(x = BMI_SM0_1, y = value, colour = GDM_1))+
+  geom_point(aes(colour = GDM_1), alpha=0.7, show.legend = FALSE)+
+  geom_smooth(data = dist.sd.2[which(dist.sd.2$para_1 == 0),],
+              method="lm", se = FALSE,
+              show.legend = FALSE, colour = "grey5") + 
+  geom_smooth(data = dist.sd.2[which(dist.sd.2$para_1 == 1),],
+              method="lm", se = FALSE,
+              show.legend = FALSE, colour = "grey50")+
+  scale_y_continuous(limits = c(0,1))+
+    facet_grid(para_1~sampleTime_1, 
+               labeller=labeller(sampleTime_1 = c("SM1" = "1st Trimester", 
+                                                  "SM2" = "2nd Trimester",
+                                                  "SM3" = "3rd Trimester", 
+                                                  "SM4" = "Delivery",
+                                                  "SM5" = "6 months pp"))) +
+    theme(strip.background = element_blank(),
+          panel.grid= element_blank(),
+          panel.border = element_blank(),
+          axis.line = element_line(colour = "black"),
+          legend.position = c(0.88,0.2),
+          legend.title = element_blank(),
+          legend.background = element_rect(colour = NA, fill = NA),
+        legend.margin=margin(0,0,0,0)) +
+  labs(y = "Bray-Curtis Dissimilarity", x="pBMI")+
+  scale_shape_manual(values = c(19,8), 
+                     labels = c("Primiparous", "Multiparous"))
 p.beta
 ```
 
@@ -1230,6 +1266,184 @@ colours20 <- c("#ffb037",
 "#b068bb",
 "#7b989e",
  "grey50")
+```
+
+##Supplementary Table 2
+
+```{r}
+t.meta <- as.tibble(sample_data(inf_filt))%>%
+  group_by(participantID)%>%
+  filter(peri_anti == "No")%>%
+  dplyr::slice(1)%>%
+  #filter(baby_weight > 2500)%>%
+  mutate(participant = TRUE,
+         gravida = if_else(gravida==1, "primigravida", "multigravida"),
+         para = if_else(para==0, "primiparous", "multiparous"))%>%
+  labelled::set_variable_labels(
+    dG = "Length of gestation (days)",
+    BMI_SM0 = "pBMI",
+    weight_gain = "GWG (kg)",
+    modeSimple = "Delivery mode = vaginal",
+    baby_weight = "Birth weight (g)",
+    sex = "Infant sex = female",
+    age = "Age",
+    participant = "n",
+    gain_cat = "GWG category",
+    weight_retained = "pp Weight Retained",
+    baby_height = "Birth length (cm)",
+    weight_height_ratio_0 = "Birth weight:length",
+    weight_perc_voigt = "Birth weight percentile",
+    height_perc_voigt = "Birth length percentile",
+    #PI_baby_0 = "Birth Ponderal Index", 
+    placentalweight = "Placental weight (g)", 
+    FP_ratio = "Birth weight:placental weight ratio",
+    weight_child_5 = "Infant weight at 6 months (g)",
+    height_child_5 = "Infant length at 6 months (cm)",
+    BMI_child_5 = "Infant BMI at 6 months",
+    #PI_child_5 = "Infant Ponderal Index at 6 months",
+    breast_feed_now = "Breastfed at 6 months",
+    solidfood = "Solid food at 6 months",
+    breast_feed_ever = "Breastfed ever"
+    )%>%
+  ungroup()
+
+
+#participants = dput(as.vector(unique(t.meta$participantID)))
+# t.meta %>% 
+#   drop_na(solidfood_month)%>%
+#   group_by(gain_cat)%>%
+#   summarize(mean = mean(solidfood_month))
+# 
+# solidfood <- t.meta %>% drop_na(solidfood_month) %>% 
+#   filter(gain_cat != "below")
+# 
+# t.test(solidfood_month ~ gain_cat, data = solidfood)
+```
+
+```{r}
+#create a list of variables to include in Table 1
+
+listVars <- c("age", "BMI_SM0", "weight_gain", "gain_cat", 
+              "dG", "modeSimple", "sex", 
+              "baby_weight", 'baby_height', "weight_height_ratio_0",
+              #"weight_perc_voigt", "height_perc_voigt",
+              "weight_child_5", "breast_feed_now", "solidfood"
+              #, "PI_child_5", "PI_baby_0", "baby_hc",'BMI_child_5', 'height_child_5',"weight_retained", "placentalweight", "FP_ratio", 
+              )
+
+```
+
+```{r}
+statistics <- c(
+  participant ~ "{n}",
+  age ~ "{mean} ({sd})",
+  baby_height ~ "{mean} ({sd})",
+  baby_weight ~ "{mean} ({sd})",
+  #PI_baby_0~ "{mean} ({sd})",
+  #BMI_child_5 ~ "{median} ({p25}, {p75})",
+  BMI_SM0 ~ "{median} ({p25}, {p75})",
+  dG ~ "{median} ({p25}, {p75})"#,
+  #FP_ratio ~ "{median} ({p25}, {p75})"#,
+  #height_child_5 ~ "{median} ({p25}, {p75})"#,
+  #PI_child_5 ~ "{median} ({p25}, {p75})"
+)
+
+types <- c(
+  all_numeric() ~ "continuous",
+  #breast_feed_ever ~ "dichotomous",
+  modeSimple ~ "dichotomous",
+  sex ~ "dichotomous"
+)
+```
+
+```{r}
+t0 <- t.meta %>%
+  #filter(gain_cat %in% c("within", "above"))%>%
+  mutate(para = factor(para, levels = c("primiparous", "multiparous")),
+         gain_cat = factor(gain_cat, levels = c("within", "above")))%>%
+  select(participant, para, all_of(listVars), -gain_cat)%>%
+  tbl_summary(
+    by = para,
+    missing = "no", 
+    #type = types,
+    statistic = statistics,
+    value = list(modeSimple = "vaginal", sex = "female")
+  )%>%
+  bold_labels()%>%
+  add_p(everything()~"kruskal.test")%>%
+  add_q()%>%
+  bold_p(t=0.05, q = TRUE)%>%
+  modify_header(p.value = "**p**", q.value = "**q**",
+                all_stat_cols() ~ "**{level}**")
+
+t1 <- t.meta %>%
+  filter(gain_cat %in% c("within", "above"))%>%
+  mutate(para = factor(para, levels = c("primiparous", "multiparous")),
+         gain_cat = factor(gain_cat, levels = c("within", "above")))%>%
+  select(participant, listVars)%>%
+  tbl_summary(
+    by = gain_cat,
+    missing = "no",  
+    #type = types,
+    statistic = statistics,
+    value = list(modeSimple = "vaginal", sex = "female")
+  )%>%
+  bold_labels()%>%
+  add_p(everything()~"kruskal.test")%>%
+  add_q()%>%
+  bold_p(t=0.05, q = TRUE)%>%
+  modify_header(p.value = "**p**", q.value = "**q**",
+                all_stat_cols() ~ "**{level}**")
+
+t2 <- t.meta %>%
+  filter(gain_cat %in% c("within", "above"))%>%
+  mutate(para = factor(para, levels = c("primiparous", "multiparous")),
+         gain_cat = factor(gain_cat, levels = c("within", "above")))%>%
+  filter(para == "primiparous")%>%
+  select(participant, listVars)%>%
+  tbl_summary(
+    by = gain_cat,
+    missing = "no",  
+   # type = types,
+    statistic = statistics,
+    value = list(modeSimple = "vaginal", sex = "female")
+  )%>%
+  bold_labels()%>%
+  add_p(everything()~"kruskal.test")%>%
+  add_q()%>%
+  bold_p(t=0.05, q = TRUE)%>%
+  modify_header(p.value = "**p**", q.value = "**q**",
+                all_stat_cols() ~ "**{level}**")
+
+t3 <- t.meta %>%
+  filter(gain_cat %in% c("within", "above"))%>%
+  mutate(para = factor(para, levels = c("primiparous", "multiparous")),
+         gain_cat = factor(gain_cat, levels = c("within", "above")))%>%
+  filter(para == "multiparous")%>%
+  select(participant, listVars)%>%
+  tbl_summary(
+    by = gain_cat,
+    type = list(baby_height ~ 'continuous'),
+    missing = "no", 
+    statistic = statistics,
+    value = list(modeSimple = "vaginal", sex = "female")
+  )%>%
+  bold_labels()%>%
+  add_p(everything()~"kruskal.test")%>%
+  add_q()%>%
+  bold_p(t=0.05, q = TRUE)%>%
+  modify_header(p.value = "**p**", q.value = "**q**",
+                all_stat_cols() ~ "**{level}**")
+
+table <- tbl_merge(
+  tbls = list(t0, t1,t2,t3),
+  tab_spanner = c("Parity",  "Overall GWG", "Primiparous GWG", "Multiparous GWG")
+)%>%
+  as_gt()
+
+table
+
+gt::gtsave(table, here::here("results", "TableS2.html"))
 ```
 
 ##Alpha diversity

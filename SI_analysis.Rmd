@@ -157,3 +157,61 @@ pdf(here("figures", "manuscript", "mec_order_tbp.pdf"), width = 8, height = 6)
 ord_mean_tbf
 dev.off()
 ```
+
+##Supplementary Table 2
+
+```{r}
+t.meta <- as.tibble(meta_data)%>%
+  group_by(participantID)%>%
+  filter(antibiotics == "No")%>%
+  dplyr::slice(1)%>%
+  #filter(baby_weight > 2500)%>%
+  mutate(participant = TRUE,
+         gravida = if_else(gravida==1, "primigravida", "multigravida"),
+         para = if_else(para==0, "primiparous", "multiparous"))%>%
+  labelled::set_variable_labels(
+    dG = "Length of gestation (days)",
+    BMI_SM0 = "pBMI",
+    weight_gain = "GWG (kg)",
+    modeSimple = "Delivery mode = vaginal",
+    baby_weight = "Birth weight (g)",
+    sex = "Infant sex = female",
+    age = "Age",
+    participant = "n",
+    gain_cat = "GWG category",
+    weight_retained = "pp Weight Retained",
+    baby_height = "Birth length (cm)",
+    weight_height_ratio_0 = "Birth weight:length",
+    perc_voigt_weight = "Birth weight percentile",
+    perc_voigt_height = "Birth length percentile",
+    #PI_baby_0 = "Birth Ponderal Index", 
+    placentalweight = "Placental weight (g)", 
+    FP_ratio = "Birth weight:placental weight ratio",
+    weight_child_5 = "Infant weight at 6 months (g)",
+    height_child_5 = "Infant length at 6 months (cm)",
+    BMI_child_5 = "Infant BMI at 6 months",
+    #PI_child_5 = "Infant Ponderal Index at 6 months",
+    breast_feed_now = "Breastfed at 6 months",
+    solidfood = "Solid food at 6 months",
+    breast_feed_ever = "Breastfed ever"
+    )%>%
+  ungroup()
+
+
+participants = dput(as.vector(unique(t.meta$participantID)))
+
+t.meta$breast_feed_ever
+
+t.meta %>% 
+  drop_na(solidfood_month)%>%
+  group_by(gain_cat)%>%
+  summarize(mean = mean(solidfood_month))
+
+solidfood <- t.meta %>% drop_na(solidfood_month) %>% 
+  filter(gain_cat != "below")
+
+t.test(solidfood_month ~ gain_cat, data = solidfood)
+
+
+
+```
