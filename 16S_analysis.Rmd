@@ -177,6 +177,199 @@ colours20 <- c("#3a8fcf",
 "grey50")
 ```
 
+##Extended Data Table 1
+
+```{r}
+t.meta <- as.tibble(sample_data(mat_filt))%>%
+  group_by(participantID)%>%
+  dplyr::slice(1)%>%
+  #filter(baby_weight > 2500)%>%
+  mutate(participant = TRUE,
+         gravida = if_else(gravida==1, "primigravida", "multigravida"),
+         para = if_else(para==0, "primiparous", "multiparous"))%>%
+  labelled::set_variable_labels(
+    dG = "Length of gestation (days)",
+    origin = "Origin",
+    gravida = "Primigravida",
+    para = "Parity",
+    BMI_SM0 = "pBMI",
+    weight_gain = "GWG (kg)",
+    modeSimple = "Delivery mode = vaginal",
+    baby_weight = "Birth weight (g)",
+    sex = "Infant sex = female",
+    age = "Age",
+    participant = "n",
+    gain_cat = "GWG category",
+    weight_retained = "pp Weight Retained",
+    baby_height = "Birth length (cm)",
+    weight_height_ratio_0 = "Birth weight:length",
+    weight_perc_voigt = "Birth weight percentile",
+    height_perc_voigt = "Birth length percentile",
+   # PI_baby_0 = "Birth Ponderal Index", 
+    placentalweight = "Placental weight (g)", 
+    FP_ratio = "Birth weight:placental weight ratio",
+    weight_child_5 = "Infant weight at 6 months (g)",
+    height_child_5 = "Infant height at 6 months (cm)",
+    BMI_child_5 = "Infant BMI at 6 months",
+    #PI_child_5 = "Infant Ponderal Index at 6 months"
+    )%>%
+  ungroup()
+
+t.meta$origin <- recode_factor(t.meta$origin, `1` = "Germany", `2` = "Russia", `3` = "Poland", `4` = "Turkey", 
+                                `6` = "Canada", `7` = "EU", `8` = "South-East Asia", `5` = "Others")
+
+t.meta <- t.meta %>%
+  labelled::set_variable_labels(origin = "Origin")
+  
+
+t.meta$BMI_cat_0 <- recode_factor(t.meta$BMI_cat_0, optimal = "<25", overweight = "25-30", obese = ">30")
+
+t.meta <- t.meta %>%
+  mutate(BMI_cat_0 = factor(BMI_cat_0, levels = c("<25", "25-30", ">30")))
+
+table(t.meta$BMI_cat_0, t.meta$para)
+
+table(t.meta$origin)
+```
+
+```{r}
+#create a list of variables to include in Table 1
+listVars <- c("age", "para", "gravida", "BMI_SM0", "weight_gain", "gain_cat", "weight_retained",
+              "dG", "modeSimple", "BMI_cat_0" #, "sex",
+              #"baby_weight", 'baby_height', "weight_height_ratio_0", 
+              #"perc_voigt_weight", "perc_voigt_height"#,
+              #"weight_child_5", 'height_child_5','BMI_child_5', "placentalweight",  "FP_ratio", 
+              )
+```
+
+```{r normality tests}
+#test variables for normal distribution
+numVars <- listVars[-which(listVars %in% 
+                             c("BMI_cat_0", "gravida", "modeSimple", "sex", "origin", "para", "gain_cat"))]
+
+t.meta %>%
+  shapiro_test(numVars)
+```
+
+```{r}
+statistics <- c(
+  participant ~ "{n}",
+  age ~ "{mean} ({sd})",
+  #baby_height ~ "{mean} ({sd})",
+  #baby_weight ~ "{mean} ({sd})",
+  #perc_voigt_height~ "{mean} ({sd})",
+ # BMI_child_5 ~ "{median} ({p25}, {p75})",
+ weight_gain ~ "{mean} ({sd})",
+  BMI_SM0 ~ "{median} ({p25}, {p75})",
+  dG ~ "{median} ({p25}, {p75})"#,
+  #FP_ratio ~ "{median} ({p25}, {p75})",
+ # height_child_5 ~ "{median} ({p25}, {p75})",
+  #perc_voigt_weight ~ "{mean} ({sd})"
+)
+
+types <- c(
+  all_numeric() ~ "continuous",
+  modeSimple ~ "dichotomous",
+ # sex ~ "dichotomous",
+ #parity ~ "categorical",
+  gravida ~ "dichotomous"
+)
+```
+
+```{r BMI cat 0 table}
+t0 <- t.meta %>%
+  mutate(para = factor(para, levels = c("primiparous", "multiparous")))%>%
+  select(participant, para, all_of(listVars), -BMI_cat_0)%>%
+  tbl_summary(
+    by = para,
+    missing = "no",  
+    #type = types,
+    statistic = statistics,
+    value = list(modeSimple = "vaginal", sex = "female", gravida = "primigravida")
+  )%>%
+  bold_labels()%>%
+  add_p(list(BMI_SM0~"kruskal.test",
+        dG~"kruskal.test"))%>%
+  add_q()%>%
+  bold_p(t=0.05, q = TRUE)%>%
+  modify_header(p.value = "**p**", q.value = "**q**",
+                all_stat_cols() ~ "**{level}**")
+
+t1 <- t.meta %>%
+  select(participant, listVars)%>%
+  tbl_summary(
+    by = BMI_cat_0,
+    missing = "no",  
+    #type = types,
+    statistic = statistics,
+    value = list(modeSimple = "vaginal", sex = "female", gravida = "primigravida")
+  )%>%
+  bold_labels()%>%
+  add_p(list(BMI_SM0~"kruskal.test",
+        dG~"kruskal.test"))%>%
+  add_q()%>%
+  bold_p(t=0.05, q = TRUE)%>%
+  modify_header(p.value = "**p**", q.value = "**q**",
+                all_stat_cols() ~ "**{level}**")
+
+t2 <- t.meta %>%
+  filter(para == "primiparous")%>%
+  select(participant, listVars)%>%
+  tbl_summary(
+    by = BMI_cat_0,
+    missing = "no",  
+    #type = types,
+    statistic = statistics,
+    value = list(modeSimple = "vaginal", sex = "female", gravida = "primigravida")
+  )%>%
+  bold_labels()%>%
+  add_p(list(BMI_SM0~"kruskal.test",
+        dG~"kruskal.test"))%>%
+  add_q()%>%
+  bold_p(t=0.05, q = TRUE)%>%
+  modify_header(p.value = "**p**", q.value = "**q**",
+                all_stat_cols() ~ "**{level}**")
+
+t3 <- t.meta %>%
+  filter(para == "multiparous")%>%
+  select(participant, listVars)%>%
+  tbl_summary(
+    by = BMI_cat_0,
+    missing = "no", 
+    #type = types,
+    statistic = statistics,
+    value = list(modeSimple = "vaginal", sex = "female", gravida = "primigravida")
+  )%>%
+  bold_labels()%>%
+  add_p(list(BMI_SM0~"kruskal.test",
+        dG~"kruskal.test"))%>%
+  add_q()%>%
+  bold_p(t=0.05, q = TRUE)%>%
+  modify_header(p.value = "**p**", q.value = "**q**",
+                all_stat_cols() ~ "**{level}**")
+
+table <- tbl_merge(
+  tbls = list(t0,t1,t2,t3),
+  tab_spanner = c("Parity", "Overall pBMI", "Primiparous pBMI", "Multiparous pBMI")
+)%>%
+  as_gt()
+
+#set_table_properties(table, layout = "autofit")
+
+# sect_properties <- prop_section(
+#   page_size = page_size(orient = "landscape",
+#                         width = 11, height = 8.5),
+#   type = "continuous",
+#   page_margins = page_mar()
+# )
+
+table
+
+gt::gtsave(table, here::here("results", "ExtendedDataTable1.html"))
+
+#save_as_docx(table, path = here::here("results", "table_S1.docx"))
+```
+
 ## Alpha diversity
 
 ```{r maternal alpha}
@@ -1268,7 +1461,7 @@ colours20 <- c("#ffb037",
  "grey50")
 ```
 
-##Supplementary Table 2
+##Extended Data Table 2
 
 ```{r}
 t.meta <- as.tibble(sample_data(inf_filt))%>%
