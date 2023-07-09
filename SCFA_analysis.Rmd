@@ -10,13 +10,20 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-all_data <- full_join(metadat, SCFA_data)%>%
-  mutate(measure = fct_relevel(measure, c("acetic_acid", "butyric_acid", "propionic_acid", 
-                                          "pentanoic_acid", "isobutyric_acid", "isovaleric_acid"))) %>%
+df_2 <- `SCFA_samples.in.`%>%
+  filter(sampleTime %in% c("SM1", "SM2", "SM3", "SM4", "SM5"))
+
+meta_scfa <- metadat %>%
+  filter(sampleTime %in% c("SM1", "SM2", "SM3", "SM4", "SM5"))
+
+all_data <- full_join(meta_scfa, df_2)%>%
+  # mutate(measure = fct_relevel(measure, c("acetic_acid", "butyric_acid", "propionic_acid", 
+  #                                         "pentanoic_acid", "isobutyric_acid", "isovaleric_acid"))) %>%
   group_by(participantID)%>%
   slice(1)%>%
-  mutate(SCFA_sample = participantID %in% SCFA_data$participantID)%>%
-  ungroup()
+  mutate(SCFA_sample = participantID %in% df_2$participantID)%>%
+  ungroup()%>%
+  select(SCFA_sample, any_antibiotics, colnames(all_data))
 
 listVars <- c("BMI_cat_0", "age", "para", "gravida", "BMI_SM0", "weight_gain", "gain_cat", "weight_retained","dG", "Mode", "SCFA_sample")
 
@@ -61,6 +68,11 @@ df <- SCFA_data%>%
   dplyr::slice(1)
 
 table(df$para, df$BMI0_gaincat)
+
+df_2 <- `SCFA_samples.in.`%>%
+  filter(sampleTime %in% c("SM1", "SM2", "SM3", "SM4", "SM5"))
+
+table(df_2$participantID, df_2$sampleTime)
 ```
 
 
